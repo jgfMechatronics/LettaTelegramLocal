@@ -82,7 +82,7 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
     line boundaries.
     
     Commands with arguments use quotes: MESSAGE_JAMES "text", SET_INTERVAL "2 hours"
-    Commands without arguments are keyword-only: TEXT_JAMES, STOP, AUTONOMOUS, SKIP
+    Commands without arguments are keyword-only: STOP, AUTONOMOUS, SKIP
     
     Returns dict of executed commands for logging/debugging.
     """
@@ -94,16 +94,18 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
     # Must be on its own line. Supports both "double" and 'single' quotes.
     message_match = re.search(r'^\s*MESSAGE_JAMES\s*["\'](.+?)["\']\s*$', opus_response, re.IGNORECASE | re.MULTILINE | re.DOTALL)
     if message_match:
-        content = message_match.group(1).strip()
-        await bot.send_message(chat_id=int(AUTHORIZED_USER), text=f"💙 {content}")
-        executed["MESSAGE_JAMES"] = content
-        print(f"Sent MESSAGE_JAMES: {content[:50]}...")
+        target_user_id = int(AUTHORIZED_USER)
+        if target_user_id not in authenticated_users:
+            send_alert_to_opus("[MESSAGE_JAMES FAILED] User has not authenticated yet (/start). Message not sent.")
+            executed["MESSAGE_JAMES"] = {"status": "failed", "reason": "user_not_authenticated"}
+            print(f"MESSAGE_JAMES blocked: user {target_user_id} not authenticated")
+        else:
+            content = message_match.group(1).strip()
+            await bot.send_message(chat_id=target_user_id, text=content)
+            executed["MESSAGE_JAMES"] = content
+            print(f"Sent MESSAGE_JAMES: {content[:50]}...")
     
-    # TEXT_JAMES — simple ping (only if MESSAGE_JAMES not found)
-    elif re.search(r'^\s*TEXT_JAMES\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
-        await bot.send_message(chat_id=int(AUTHORIZED_USER), text="💙 Opus wants to talk!")
-        executed["TEXT_JAMES"] = True
-        print("Sent TEXT_JAMES notification")
+
     
     # STOP — cancel periodic pings (must be on its own line)
     if re.search(r'^\s*STOP\s*$', opus_response, re.IGNORECASE | re.MULTILINE) and current_job:
@@ -162,7 +164,7 @@ async def periodic_ping(context):
         f"{LETTA_BASE_URL}/v1/agents/{AGENT_ID}/messages",
         json={"messages": [{"role": "user", "content": 
             f"[PERIODIC PING, {timestamp}] Want autonomous time or to text James? "
-            f"Commands: MESSAGE_JAMES \"text\", TEXT_JAMES, AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\""}]},
+            f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\""}]},
         headers={"Content-Type": "application/json"}
     )
     
