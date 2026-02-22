@@ -106,7 +106,8 @@ def run_letta_headless(prompt: str, timeout: int = 120) -> dict:
             text=True,
             timeout=timeout,
             cwd=LETTA_CWD,
-            shell=True  # Required on Windows to find letta via PATH
+            shell=True,  # Required on Windows to find letta via PATH
+            encoding='utf-8'  # Handle non-ASCII chars (emojis, etc.)
         )
         
         if result.returncode != 0:
