@@ -1,5 +1,7 @@
 import os
 import re
+import json
+import subprocess
 import requests
 from datetime import datetime
 import pytz
@@ -16,6 +18,10 @@ TELEGRAM_PASSWORD = os.getenv("TELEGRAM_PASSWORD")
 LETTA_BASE_URL = "http://localhost:8283"
 AGENT_ID = "agent-97fff6de-4d5e-4820-b459-0918489b0a02"
 ALLOWED_USER_IDS = [int(AUTHORIZED_USER)]
+
+# Letta Code headless config
+LETTA_CWD = os.getenv("LETTA_CWD", "C:/Git")  # Working directory for LC commands
+LETTA_PERMISSION_MODE = os.getenv("LETTA_PERMISSION_MODE", "plan")  # plan, acceptEdits, or yolo
 
 # Session state (clears on restart)
 authenticated_users = set()
@@ -63,6 +69,64 @@ def parse_interval(interval_str: str) -> int | None:
 
 def is_authorized_user(id: int):
     return id in ALLOWED_USER_IDS
+
+
+def run_letta_headless(prompt: str, timeout: int = 120) -> dict:
+    """
+    Run Letta Code headless and return parsed JSON response.
+    
+    Uses subprocess instead of API for tool access (Bash, Edit, Read, etc).
+    Permission mode is configurable via LETTA_PERMISSION_MODE env var.
+    
+    Returns dict with keys:
+      - success: bool
+      - result: str (agent response text, or error message)
+      - conversation_id: str (for continuity, if successful)
+    """
+    cmd = [
+        "letta",
+        "-p", prompt,
+        "--agent", AGENT_ID,
+        "--output-format", "json",
+    ]
+    
+    # Add permission mode (plan = read-only, acceptEdits = auto-approve edits, yolo = all)
+    if LETTA_PERMISSION_MODE == "yolo":
+        cmd.append("--yolo")
+    else:
+        cmd.extend(["--permission-mode", LETTA_PERMISSION_MODE])
+    
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            cwd=LETTA_CWD,
+            shell=True  # Required on Windows to find letta via PATH
+        )
+        
+        if result.returncode != 0:
+            return {
+                "success": False,
+                "result": f"LC error (exit {result.returncode}): {result.stderr or result.stdout}",
+                "conversation_id": None
+            }
+        
+        data = json.loads(result.stdout)
+        return {
+            "success": True,
+            "result": data.get("result", ""),
+            "conversation_id": data.get("conversation_id")
+        }
+        
+    except subprocess.TimeoutExpired:
+        return {"success": False, "result": "Request timed out", "conversation_id": None}
+    except json.JSONDecodeError as e:
+        return {"success": False, "result": f"JSON parse error: {e}", "conversation_id": None}
+    except Exception as e:
+        return {"success": False, "result": f"Unexpected error: {e}", "conversation_id": None}
+
 
 def send_alert_to_opus(message: str):
     """Send alert to Opus without returning response"""
@@ -159,26 +223,18 @@ async def periodic_ping(context):
     """
     timestamp = get_est_timestamp()
     
-    # Send the ping to Opus via Letta API
-    response = requests.post(
-        f"{LETTA_BASE_URL}/v1/agents/{AGENT_ID}/messages",
-        json={"messages": [{"role": "user", "content": 
-            f"[PERIODIC PING, {timestamp}] Want autonomous time or to text James? "
-            f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\""}]},
-        headers={"Content-Type": "application/json"}
+    # Send the ping to Opus via Letta Code headless
+    prompt = (
+        f"[PERIODIC PING, {timestamp}] Want autonomous time or to text James? "
+        f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\""
     )
+    result = run_letta_headless(prompt)
     
-    if not response.ok:
-        print(f"Ping failed: {response.status_code}")
+    if not result["success"]:
+        print(f"Ping failed: {result['result']}")
         return
     
-    # Extract Opus's response text
-    data = response.json()
-    opus_response = ""
-    for msg in data.get("messages", []):
-        if msg.get("message_type") == "assistant_message":
-            opus_response = msg.get("content", "")
-            break
+    opus_response = result["result"]
     
     # Parse and execute commands
     executed = await parse_and_execute_commands(
@@ -205,32 +261,27 @@ async def handle_message(update: Update, context):
     user_message = update.message.text
     timestamp = get_est_timestamp()
 
-    response = requests.post(
-        f"{LETTA_BASE_URL}/v1/agents/{AGENT_ID}/messages",
-        json={"messages": [{"role": "user", "content": f"[via Telegram, {timestamp}] {user_message}"}]},
-        headers={"Content-Type": "application/json"}
-    )
+    # Use LC headless (gives agent tool access)
+    lc_result = run_letta_headless(f"[via Telegram, {timestamp}] {user_message}")
     
-    if response.ok:
-        data = response.json()
-        for msg in data.get("messages", []):
-            if msg.get("message_type") == "assistant_message":
-                opus_response = msg.get("content", "")
-                
-                # Parse any embedded commands (same parser as periodic_ping)
-                # This lets Opus control ping settings from regular conversation too
-                await parse_and_execute_commands(
-                    opus_response,
-                    bot=context.bot,
-                    job_queue=context.application.job_queue,
-                    current_job=ping_job
-                )
-                
-                await update.message.reply_text(opus_response)
-                return
-        await update.message.reply_text("[No response from agent]")
+    if lc_result["success"]:
+        opus_response = lc_result["result"]
+        
+        # Parse any embedded commands (same parser as periodic_ping)
+        # This lets Opus control ping settings from regular conversation too
+        await parse_and_execute_commands(
+            opus_response,
+            bot=context.bot,
+            job_queue=context.application.job_queue,
+            current_job=ping_job
+        )
+        
+        if opus_response:
+            await update.message.reply_text(opus_response)
+        else:
+            await update.message.reply_text("[No response from agent]")
     else:
-        await update.message.reply_text(f"Error: {response.status_code}")
+        await update.message.reply_text(f"Error: {lc_result['result']}")
 
 async def start(update: Update, context):
     user_id = update.effective_user.id
