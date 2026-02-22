@@ -88,6 +88,9 @@ def run_letta_headless(prompt: str, timeout: int = 120) -> dict:
         "-p", prompt,
         "--agent", AGENT_ID,
         "--output-format", "json",
+        # Reduce context bloat for headless mode (see: letta --help)
+        "--no-skills",              # Disable skill list injection
+        "--no-system-info-reminder",  # Disable device/git/cwd context
     ]
     
     # Add permission mode (plan = read-only, acceptEdits = auto-approve edits, yolo = all)
