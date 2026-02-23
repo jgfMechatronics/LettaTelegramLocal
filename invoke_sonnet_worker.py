@@ -16,6 +16,7 @@ import os
 import json
 import subprocess
 import argparse
+import time
 
 # Windows console defaults to cp1252; reconfigure to UTF-8 so emojis in
 # output and Sonnet's responses render correctly in the spawned console window.
@@ -370,11 +371,9 @@ def main() -> int:
                 f.write(final_response)
         except Exception as e:
             print(f"[worker] Warning: could not write result file: {e}")
-
-    try:
-        input("\n  Press Enter to close this window...")
-    except EOFError:
-        pass
+    
+    print("Closing in 5s")
+    time.sleep(5)
 
     return exit_code
 
