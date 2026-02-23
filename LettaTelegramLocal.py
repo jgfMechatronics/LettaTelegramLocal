@@ -242,35 +242,7 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
     if re.search(r'^\s*SKIP\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
         executed["SKIP"] = True
         print("Opus skipped this ping")
-    
-    # INVOKE_AGENT "agent-id" "prompt" — invoke another agent in headless mode
-    # Security: only parsed from Opus's response, never from external messages
-    # The target agent gets full tool access (Read, Bash, Grep, etc.)
-    invoke_match = re.search(
-        r'^\s*INVOKE_AGENT\s*["\']([^"\']+)["\']\s*["\'](.+?)["\']\s*$',
-        opus_response, re.IGNORECASE | re.MULTILINE | re.DOTALL
-    )
-    if invoke_match:
-        target_agent = invoke_match.group(1).strip()
-        target_prompt = invoke_match.group(2).strip()
         
-        # Self-invocation guard — prevent infinite loops
-        if target_agent == AGENT_ID:
-            send_alert_to_opus("[INVOKE_AGENT FAILED] Cannot invoke self - would cause infinite loop")
-            executed["INVOKE_AGENT"] = {"agent": target_agent, "success": False}
-        else:
-            print(f"Invoking agent {target_agent} with prompt: {target_prompt[:50]}...")
-            
-            result = run_letta_headless(target_prompt, agent_id=target_agent)
-            
-            # Alert Opus with the result
-            if result["success"]:
-                send_alert_to_opus(f"[INVOKE_AGENT response from {target_agent}]\n{result['result']}")
-            else:
-                send_alert_to_opus(f"[INVOKE_AGENT FAILED for {target_agent}] {result['result']}")
-            
-            executed["INVOKE_AGENT"] = {"agent": target_agent, "success": result["success"]}
-    
     return executed
 
 
