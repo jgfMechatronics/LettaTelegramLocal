@@ -26,6 +26,48 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 SONNET_AGENT_ID = "agent-ed4e2792-d2d9-45c3-8646-1eb57113d35f"
 DEFAULT_CWD = os.getenv("LETTA_CWD", "C:/Git")
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+DOT_ENV_PATH = os.path.join(SCRIPT_DIR, ".env")
+
+VALID_PERMISSION_MODES = {"default", "acceptEdits", "plan", "bypassPermissions"}
+
+
+def read_permission_mode() -> str:
+    """Read PERMISSION_MODE from .env in the same directory as this script.
+
+    Returns the mode string, defaulting to 'default' (all writes/bash require
+    explicit approval) if the file is absent, the key is missing, or the value
+    is not a recognised LC permission mode.
+
+    Valid values match letta --permission-mode:
+        default            - normal flow, prompts for everything
+        acceptEdits        - auto-allow write tools (Edit/Write), prompt for Bash
+        plan               - read-only; denies all writes and non-read-only Bash
+        bypassPermissions  - auto-allow everything (equivalent to --yolo)
+    """
+    try:
+        with open(DOT_ENV_PATH, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if line.startswith("#") or "=" not in line:
+                    continue
+                key, _, value = line.partition("=")
+                if key.strip() == "PERMISSION_MODE":
+                    mode = value.strip().strip('"').strip("'")
+                    if mode in VALID_PERMISSION_MODES:
+                        return mode
+                    print(
+                        f"[worker] ⚠  .env: invalid PERMISSION_MODE={mode!r}. "
+                        f"Valid: {', '.join(sorted(VALID_PERMISSION_MODES))}. "
+                        f"Falling back to 'default'."
+                    )
+                    return "default"
+    except FileNotFoundError:
+        pass  # No .env — silently use default
+    except Exception as e:
+        print(f"[worker] ⚠  Could not read {DOT_ENV_PATH}: {e}. Using 'default'.")
+    return "default"
+
 
 # ── Display helpers ────────────────────────────────────────────────────────────
 
@@ -71,6 +113,8 @@ def extract_text(content) -> str:
 def launch_letta(cwd: str) -> subprocess.Popen:
     """Start the Letta headless process and return it."""
     # letta is an npm-installed command; on Windows it resolves as letta.cmd
+    permission_mode = read_permission_mode()
+    print(f"[worker] Permission mode: {permission_mode}")
     cmd = [
         "letta.cmd",
         "--agent", SONNET_AGENT_ID,
@@ -78,6 +122,7 @@ def launch_letta(cwd: str) -> subprocess.Popen:
         "--output-format", "stream-json",
         "--no-skills",
         "--no-system-info-reminder",
+        "--permission-mode", permission_mode,
     ]
     return subprocess.Popen(
         cmd,
