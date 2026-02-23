@@ -30,6 +30,7 @@ authenticated_users = set()
 # These are module-level so they persist across async calls but reset on script restart
 ping_job = None           # Reference to the scheduled job (so we can cancel/modify it)
 ping_interval = 4 * 3600  # Default: 4 hours in seconds
+headless_mode = False     # When True, use LC headless (tool access); when False, use direct API
 
 def get_est_timestamp():
     est = pytz.timezone('US/Eastern')
@@ -66,7 +67,7 @@ def parse_interval(interval_str: str) -> int | None:
         return int(value)
     return None
 
-
+# TODO: We have a lot of auth checks around that should be commonized
 def is_authorized_user(id: int):
     return id in ALLOWED_USER_IDS
 
@@ -144,6 +145,34 @@ def send_alert_to_opus(message: str):
         json={"messages": [{"role": "user", "content": message}]},
         headers={"Content-Type": "application/json"}
     )
+
+
+def send_message_direct(message: str) -> dict:
+    """
+    Send message via direct API and return response.
+    Returns dict with 'success' and 'result' keys (same shape as run_letta_headless).
+    """
+    try:
+        resp = requests.post(
+            f"{LETTA_BASE_URL}/v1/agents/{AGENT_ID}/messages",
+            json={"messages": [{"role": "user", "content": message}]},
+            headers={"Content-Type": "application/json"},
+            timeout=120
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        
+        # Extract assistant message text from response
+        # Letta API returns {"messages": [...]} with message_type field
+        assistant_text = ""
+        for msg in data.get("messages", []):
+            if msg.get("message_type") == "assistant_message" and msg.get("content"):
+                assistant_text = msg["content"]
+                break
+        
+        return {"success": True, "result": assistant_text}
+    except Exception as e:
+        return {"success": False, "result": str(e)}
 
 
 async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, current_job=None):
@@ -297,12 +326,16 @@ async def handle_message(update: Update, context):
     
     user_message = update.message.text
     timestamp = get_est_timestamp()
+    formatted_message = f"[via Telegram, {timestamp}] {user_message}"
 
-    # Use LC headless (gives agent tool access)
-    lc_result = run_letta_headless(f"[via Telegram, {timestamp}] {user_message}")
+    # Use LC headless (tool access) or direct API based on toggle
+    if headless_mode:
+        result = run_letta_headless(formatted_message)
+    else:
+        result = send_message_direct(formatted_message)
     
-    if lc_result["success"]:
-        opus_response = lc_result["result"]
+    if result["success"]:
+        opus_response = result["result"]
         
         # Parse any embedded commands (same parser as periodic_ping)
         # This lets Opus control ping settings from regular conversation too
@@ -318,7 +351,7 @@ async def handle_message(update: Update, context):
         else:
             await update.message.reply_text("[No response from agent]")
     else:
-        await update.message.reply_text(f"Error: {lc_result['result']}")
+        await update.message.reply_text(f"Error: {result['result']}")
 
 async def start(update: Update, context):
     user_id = update.effective_user.id
@@ -340,11 +373,26 @@ async def start(update: Update, context):
     authenticated_users.add(user_id)
     await update.message.reply_text("Connected to Opus! Send me a message.")
 
+
+async def toggle_headless(update: Update, context):
+    """Toggle between headless mode (LC with tools) and direct API mode."""
+    global headless_mode
+    user_id = update.effective_user.id
+    
+    if not is_authorized_user(user_id) or user_id not in authenticated_users:
+        return
+    
+    headless_mode = not headless_mode
+    status = "ON 🔧 (LC headless, tool access)" if headless_mode else "OFF 💬 (direct API, faster)"
+    await update.message.reply_text(f"Headless mode: {status}")
+
+
 def main():
     global ping_job
     
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("headless", toggle_headless))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
     # Schedule the periodic ping using JobQueue
