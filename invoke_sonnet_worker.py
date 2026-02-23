@@ -115,9 +115,12 @@ def handle_tool_return(msg: dict) -> None:
     print(f"  {'✅' if status == 'success' else '❌'} {preview}\n")
 
 
-def handle_assistant_message(msg: dict) -> str | None:
-    """Print the assistant's message and return its text, or None if empty."""
-    text = extract_text(msg.get("content", ""))
+def flush_assistant_buffer(buffer: list) -> str | None:
+    """Join buffered assistant chunks, print as one block, clear the buffer. Returns text or None."""
+    if not buffer:
+        return None
+    text = "".join(buffer)
+    buffer.clear()
     if text.strip():
         print(f"\n💬 Sonnet:\n{text}\n")
         return text
@@ -136,17 +139,21 @@ def handle_result_event(msg: dict, current_response: str | None) -> str | None:
     return current_response or msg.get("result") or ""
 
 
-def dispatch_message_event(msg: dict) -> str | None:
-    """Route a message event to the appropriate handler. Returns assistant text if any."""
+def dispatch_message_event(msg: dict, assistant_buffer: list) -> None:
+    """
+    Route a message event. assistant_message chunks are appended to assistant_buffer
+    rather than printed immediately — caller flushes the buffer at transition boundaries.
+    """
     message_type = msg.get("message_type", "")
-    if message_type == "tool_call_message":
+    if message_type == "assistant_message":
+        text = extract_text(msg.get("content", ""))
+        if text:
+            assistant_buffer.append(text)
+    elif message_type == "tool_call_message":
         handle_tool_call(msg)
     elif message_type == "tool_return_message":
         handle_tool_return(msg)
-    elif message_type == "assistant_message":
-        return handle_assistant_message(msg)
     # reasoning_message: skip (verbose; visible in Sonnet's LC session)
-    return None
 
 
 # ── Approval handling ──────────────────────────────────────────────────────────
@@ -204,9 +211,13 @@ def process_events(proc: subprocess.Popen, prompt: str) -> str | None:
     """
     Read and dispatch events from the Letta process until the session completes.
     Returns the final assistant response, or None if the session ended without one.
+
+    LC streams assistant responses as multiple consecutive assistant_message chunks.
+    We buffer them and flush as a single block at every non-assistant event boundary.
     """
     final_response = None
     prompt_sent = False
+    assistant_buffer: list = []
 
     for raw_line in proc.stdout:
         raw_line = raw_line.rstrip("\n")
@@ -227,18 +238,27 @@ def process_events(proc: subprocess.Popen, prompt: str) -> str | None:
                 prompt_sent = True
 
         elif msg_type == "message":
-            text = dispatch_message_event(msg)
-            if text:
-                final_response = text
+            if msg.get("message_type") != "assistant_message":
+                flushed = flush_assistant_buffer(assistant_buffer)
+                if flushed:
+                    final_response = flushed
+            dispatch_message_event(msg, assistant_buffer)
 
         elif msg_type == "control_request":
+            flushed = flush_assistant_buffer(assistant_buffer)
+            if flushed:
+                final_response = flushed
             handle_control_request(proc, msg)
 
         elif msg_type == "result":
+            flushed = flush_assistant_buffer(assistant_buffer)
+            if flushed:
+                final_response = flushed
             final_response = handle_result_event(msg, final_response)
             break
 
         elif msg_type == "error":
+            flush_assistant_buffer(assistant_buffer)
             print(f"\n[worker] ❌ Error: {msg.get('message', 'unknown')}")
             break
 
