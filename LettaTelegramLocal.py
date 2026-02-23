@@ -113,7 +113,8 @@ def run_letta_headless(prompt: str, timeout: int = 120, agent_id: str = AGENT_ID
             timeout=timeout,
             cwd=LETTA_CWD,
             shell=True,  # Required on Windows to find letta via PATH
-            encoding='utf-8'  # Handle non-ASCII chars (emojis, etc.)
+            encoding='utf-8',  # Handle non-ASCII chars (emojis, etc.)
+            env={**os.environ, "LETTA_CODE_AGENT_ROLE": "subagent"},  # Minimal reminders + default conversation
         )
         
         if result.returncode != 0:
