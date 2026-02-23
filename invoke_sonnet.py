@@ -16,6 +16,11 @@ import os
 import subprocess
 import tempfile
 
+# Windows console defaults to cp1252; reconfigure stdout/stderr to UTF-8 so
+# emojis in Sonnet's responses don't cause encoding errors when printing to Opus.
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 LOCK_FILE = os.path.join(tempfile.gettempdir(), "invoke_sonnet.lock")
 WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoke_sonnet_worker.py")
 

@@ -17,6 +17,11 @@ import json
 import subprocess
 import argparse
 
+# Windows console defaults to cp1252; reconfigure to UTF-8 so emojis in
+# output and Sonnet's responses render correctly in the spawned console window.
+sys.stdout.reconfigure(encoding="utf-8")
+sys.stderr.reconfigure(encoding="utf-8")
+
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 SONNET_AGENT_ID = "agent-ed4e2792-d2d9-45c3-8646-1eb57113d35f"
