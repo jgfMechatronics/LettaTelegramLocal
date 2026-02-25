@@ -1,14 +1,19 @@
 #!/usr/bin/env python3
 """
-invoke_sonnet_worker.py - Console worker: run Sonnet session, stream output, handle approvals.
+invoke_agent_worker.py - Console worker: run agent session, stream output, handle approvals.
 
-Spawned by invoke_sonnet.py with CREATE_NEW_CONSOLE. Not meant to be called directly.
+Spawned by invoke_agent.py with CREATE_NEW_CONSOLE. Not meant to be called directly.
+
+Usage:
+    python invoke_agent_worker.py <agent_name> [--cwd PATH] [--result-file PATH] "prompt"
+
+Agent names are resolved via agents.json in the same directory.
 
 Wire protocol (protocol.ts):
-  type="system"          → init event; send prompt on receipt
-  type="message"         → content event; message_type discriminates
-  type="control_request" → tool approval needed; block on input(), respond via stdin
-  type="result"          → session complete
+  type="system"          -> init event; send prompt on receipt
+  type="message"         -> content event; message_type discriminates
+  type="control_request" -> tool approval needed; block on input(), respond via stdin
+  type="result"          -> session complete
 """
 
 import sys
@@ -18,34 +23,49 @@ import subprocess
 import argparse
 import time
 
-# Windows console defaults to cp1252; reconfigure to UTF-8 so emojis in
-# output and Sonnet's responses render correctly in the spawned console window.
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-# ── Constants ─────────────────────────────────────────────────────────────────
+# ── Constants ──────────────────────────────────────────────────────────────────
 
-SONNET_AGENT_ID = "agent-ed4e2792-d2d9-45c3-8646-1eb57113d35f"
 DEFAULT_CWD = os.getenv("LETTA_CWD", "C:/Git")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOT_ENV_PATH = os.path.join(SCRIPT_DIR, ".env")
+AGENTS_JSON_PATH = os.path.join(SCRIPT_DIR, "agents.json")
 
 VALID_PERMISSION_MODES = {"default", "acceptEdits", "plan", "bypassPermissions"}
 
 
+# ── Agent registry ─────────────────────────────────────────────────────────────
+
+def load_agent_registry() -> dict:
+    """Load agents.json from the script directory. Returns the registry dict."""
+    try:
+        with open(AGENTS_JSON_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except FileNotFoundError:
+        print(f"[worker] ❌ agents.json not found at {AGENTS_JSON_PATH}")
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"[worker] ❌ agents.json is invalid JSON: {e}")
+        sys.exit(1)
+
+
+def resolve_agent(name: str) -> dict:
+    """Look up agent by name. Returns {port, agent_id}. Exits with clear error if not found."""
+    registry = load_agent_registry()
+    if name not in registry:
+        available = ", ".join(sorted(registry.keys()))
+        print(f"[worker] ❌ Unknown agent {name!r}. Available agents: {available}")
+        print(f"[worker]    Check {AGENTS_JSON_PATH} to add new agents.")
+        sys.exit(1)
+    return registry[name]
+
+
+# ── Permission mode ────────────────────────────────────────────────────────────
+
 def read_permission_mode() -> str:
-    """Read PERMISSION_MODE from .env in the same directory as this script.
-
-    Returns the mode string, defaulting to 'default' (all writes/bash require
-    explicit approval) if the file is absent, the key is missing, or the value
-    is not a recognised LC permission mode.
-
-    Valid values match letta --permission-mode:
-        default            - normal flow, prompts for everything
-        acceptEdits        - auto-allow write tools (Edit/Write), prompt for Bash
-        plan               - read-only; denies all writes and non-read-only Bash
-        bypassPermissions  - auto-allow everything (equivalent to --yolo)
-    """
+    """Read PERMISSION_MODE from .env in the same directory as this script."""
     try:
         with open(DOT_ENV_PATH, "r", encoding="utf-8") as f:
             for line in f:
@@ -64,7 +84,7 @@ def read_permission_mode() -> str:
                     )
                     return "default"
     except FileNotFoundError:
-        pass  # No .env — silently use default
+        pass
     except Exception as e:
         print(f"[worker] ⚠  Could not read {DOT_ENV_PATH}: {e}. Using 'default'.")
     return "default"
@@ -74,27 +94,28 @@ def read_permission_mode() -> str:
 
 def format_tool_input(tool_name: str, input_dict: dict) -> str:
     """One-line summary of tool arguments for console display."""
-    if tool_name == "Read":
-        path = input_dict.get("file_path", "")
-        offset, limit = input_dict.get("offset"), input_dict.get("limit")
-        extra = f" [{offset}:{offset+limit}]" if offset and limit else (" [partial]" if offset or limit else "")
-        return f"  {path}{extra}"
-    elif tool_name == "Grep":
-        return f"  pattern: {input_dict.get('pattern', '')!r}  path: {input_dict.get('path', '.')}"
-    elif tool_name == "Glob":
-        return f"  {input_dict.get('pattern', '')}  in: {input_dict.get('path', '.')}"
-    elif tool_name == "Edit":
-        path = input_dict.get("file_path", "")
-        old = (input_dict.get("old_string") or "")[:80]
-        new = (input_dict.get("new_string") or "")[:80]
-        return f"  file: {path}\n  old: {old!r}\n  new: {new!r}"
-    elif tool_name == "Write":
-        return f"  {input_dict.get('file_path', '')}  ({len(input_dict.get('content', ''))} chars)"
-    elif tool_name == "Bash":
-        return f"  {(input_dict.get('command') or '')[:120]}"
-    else:
-        raw = json.dumps(input_dict)
-        return f"  {raw[:200]}{'...' if len(raw) > 200 else ''}"
+    match tool_name:
+        case "Read":
+            path = input_dict.get("file_path", "")
+            offset, limit = input_dict.get("offset"), input_dict.get("limit")
+            extra = f" [{offset}:{offset+limit}]" if offset and limit else (" [partial]" if offset or limit else "")
+            return f"  {path}{extra}"
+        case "Grep":
+            return f"  pattern: {input_dict.get('pattern', '')!r}  path: {input_dict.get('path', '.')}"
+        case "Glob":
+            return f"  {input_dict.get('pattern', '')}  in: {input_dict.get('path', '.')}"
+        case "Edit":
+            path = input_dict.get("file_path", "")
+            old = (input_dict.get("old_string") or "")[:80]
+            new = (input_dict.get("new_string") or "")[:80]
+            return f"  file: {path}\n  old: {old!r}\n  new: {new!r}"
+        case "Write":
+            return f"  {input_dict.get('file_path', '')}  ({len(input_dict.get('content', ''))} chars)"
+        case "Bash":
+            return f"  {(input_dict.get('command') or '')[:120]}"
+        case _:
+            raw = json.dumps(input_dict)
+            return f"  {raw[:200]}{'...' if len(raw) > 200 else ''}"
 
 
 def extract_text(content) -> str:
@@ -111,14 +132,13 @@ def extract_text(content) -> str:
 
 # ── Letta process ──────────────────────────────────────────────────────────────
 
-def launch_letta(cwd: str) -> subprocess.Popen:
+def launch_letta(cwd: str, agent_id: str, letta_url: str) -> subprocess.Popen:
     """Start the Letta headless process and return it."""
-    # letta is an npm-installed command; on Windows it resolves as letta.cmd
     permission_mode = read_permission_mode()
     print(f"[worker] Permission mode: {permission_mode}")
     cmd = [
         "letta.cmd",
-        "--agent", SONNET_AGENT_ID,
+        "--agent", agent_id,
         "--input-format", "stream-json",
         "--output-format", "stream-json",
         "--no-skills",
@@ -132,7 +152,7 @@ def launch_letta(cwd: str) -> subprocess.Popen:
         stderr=subprocess.PIPE,
         text=True,
         encoding="utf-8",
-        env={**os.environ, "LETTA_CODE_AGENT_ROLE": "subagent"},
+        env={**os.environ, "LETTA_CODE_AGENT_ROLE": "subagent", "LETTA_BASE_URL": letta_url},
         cwd=cwd,
     )
 
@@ -166,14 +186,14 @@ def handle_tool_return(msg: dict) -> None:
     print(f"  {'✅' if status == 'success' else '❌'} {preview}\n")
 
 
-def flush_assistant_buffer(buffer: list) -> str | None:
+def flush_assistant_buffer(buffer: list, agent_name: str) -> str | None:
     """Join buffered assistant chunks, print as one block, clear the buffer. Returns text or None."""
     if not buffer:
         return None
     text = "".join(buffer)
     buffer.clear()
     if text.strip():
-        print(f"\n💬 Sonnet:\n{text}\n")
+        print(f"\n💬 {agent_name.capitalize()}:\n{text}\n")
         return text
     return None
 
@@ -204,7 +224,7 @@ def dispatch_message_event(msg: dict, assistant_buffer: list) -> None:
         handle_tool_call(msg)
     elif message_type == "tool_return_message":
         handle_tool_return(msg)
-    # reasoning_message: skip (verbose; visible in Sonnet's LC session)
+    # reasoning_message: skip (verbose; visible in agent's LC session)
 
 
 # ── Approval handling ──────────────────────────────────────────────────────────
@@ -258,13 +278,10 @@ def handle_control_request(proc: subprocess.Popen, msg: dict) -> None:
 
 # ── Event loop ─────────────────────────────────────────────────────────────────
 
-def process_events(proc: subprocess.Popen, prompt: str) -> str | None:
+def process_events(proc: subprocess.Popen, prompt: str, agent_name: str) -> str | None:
     """
     Read and dispatch events from the Letta process until the session completes.
     Returns the final assistant response, or None if the session ended without one.
-
-    LC streams assistant responses as multiple consecutive assistant_message chunks.
-    We buffer them and flush as a single block at every non-assistant event boundary.
     """
     final_response = None
     prompt_sent = False
@@ -283,57 +300,58 @@ def process_events(proc: subprocess.Popen, prompt: str) -> str | None:
 
         msg_type = msg.get("type", "")
 
-        if msg_type == "system" and msg.get("subtype") == "init":
-            if not prompt_sent:
-                send_prompt(proc, prompt)
-                prompt_sent = True
+        match msg_type:
+            case "system" if msg.get("subtype") == "init":
+                if not prompt_sent:
+                    send_prompt(proc, prompt)
+                    prompt_sent = True
 
-        elif msg_type == "message":
-            if msg.get("message_type") != "assistant_message":
-                flushed = flush_assistant_buffer(assistant_buffer)
+            case "message":
+                if msg.get("message_type") != "assistant_message":
+                    flushed = flush_assistant_buffer(assistant_buffer, agent_name)
+                    if flushed:
+                        final_response = flushed
+                dispatch_message_event(msg, assistant_buffer)
+
+            case "control_request":
+                flushed = flush_assistant_buffer(assistant_buffer, agent_name)
                 if flushed:
                     final_response = flushed
-            dispatch_message_event(msg, assistant_buffer)
+                handle_control_request(proc, msg)
 
-        elif msg_type == "control_request":
-            flushed = flush_assistant_buffer(assistant_buffer)
-            if flushed:
-                final_response = flushed
-            handle_control_request(proc, msg)
+            case "result":
+                flushed = flush_assistant_buffer(assistant_buffer, agent_name)
+                if flushed:
+                    final_response = flushed
+                final_response = handle_result_event(msg, final_response)
+                break
 
-        elif msg_type == "result":
-            flushed = flush_assistant_buffer(assistant_buffer)
-            if flushed:
-                final_response = flushed
-            final_response = handle_result_event(msg, final_response)
-            break
-
-        elif msg_type == "error":
-            flush_assistant_buffer(assistant_buffer)
-            print(f"\n[worker] ❌ Error: {msg.get('message', 'unknown')}")
-            break
+            case "error":
+                flush_assistant_buffer(assistant_buffer, agent_name)
+                print(f"\n[worker] ❌ Error: {msg.get('message', 'unknown')}")
+                break
 
     return final_response
 
 
 # ── Session orchestration ──────────────────────────────────────────────────────
 
-def print_session_header(cwd: str, prompt: str) -> None:
+def print_session_header(agent_name: str, cwd: str, prompt: str) -> None:
     print(f"\n{'='*60}")
-    print(f"  invoke_sonnet_worker.py")
+    print(f"  invoke_agent_worker.py  [{agent_name}]")
     print(f"  cwd: {cwd}")
     print(f"  prompt: {prompt[:100]}{'...' if len(prompt) > 100 else ''}")
     print(f"{'='*60}\n")
 
 
-def run_session(cwd: str, prompt: str) -> tuple[int, str | None]:
-    """Launch Sonnet, process the event stream, return (exit_code, final_response)."""
-    print_session_header(cwd, prompt)
-    proc = launch_letta(cwd)
+def run_session(agent_name: str, agent_id: str, letta_url: str, cwd: str, prompt: str) -> tuple[int, str | None]:
+    """Launch agent, process the event stream, return (exit_code, final_response)."""
+    print_session_header(agent_name, cwd, prompt)
+    proc = launch_letta(cwd, agent_id, letta_url)
     final_response = None
 
     try:
-        final_response = process_events(proc, prompt)
+        final_response = process_events(proc, prompt, agent_name)
     except KeyboardInterrupt:
         print("\n[worker] Interrupted")
         proc.terminate()
@@ -353,17 +371,27 @@ def run_session(cwd: str, prompt: str) -> tuple[int, str | None]:
 # ── Entry point ────────────────────────────────────────────────────────────────
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Sonnet session worker (spawned by invoke_sonnet.py)")
-    parser.add_argument("--cwd", default=DEFAULT_CWD, help="Working directory for Sonnet")
+    parser = argparse.ArgumentParser(description="Agent session worker (spawned by invoke_agent.py)")
+    parser.add_argument("agent_name", help="Name of the agent to invoke (must be in agents.json)")
+    parser.add_argument("--cwd", default=DEFAULT_CWD, help="Working directory for the agent")
     parser.add_argument("--result-file", dest="result_file", default=None,
                         help="Path to write final response for the launcher to capture")
-    parser.add_argument("prompt", help="The prompt to send to Sonnet")
+    parser.add_argument("prompt", help="The prompt to send to the agent")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    exit_code, final_response = run_session(args.cwd, args.prompt)
+    agent = resolve_agent(args.agent_name)
+    letta_url = f"http://localhost:{agent['port']}"
+
+    exit_code, final_response = run_session(
+        agent_name=args.agent_name,
+        agent_id=agent["agent_id"],
+        letta_url=letta_url,
+        cwd=args.cwd,
+        prompt=args.prompt,
+    )
 
     if args.result_file and final_response:
         try:
@@ -371,7 +399,7 @@ def main() -> int:
                 f.write(final_response)
         except Exception as e:
             print(f"[worker] Warning: could not write result file: {e}")
-    
+
     print("Closing in 5s")
     time.sleep(5)
 
@@ -380,3 +408,6 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
+
+
+

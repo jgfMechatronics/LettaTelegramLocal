@@ -1,0 +1,14 @@
+{
+  "sonnet": {
+    "port": 8283,
+    "agent_id": "agent-ed4e2792-d2d9-45c3-8646-1eb57113d35f"
+  },
+  "opus": {
+    "port": 8283,
+    "agent_id": "agent-97fff6de-4d5e-4820-b459-0918489b0a02"
+  },
+  "haiku": {
+    "port": 8284,
+    "agent_id": "agent-071e3427-ed1f-4301-af50-fee45838a8cb"
+  }
+}

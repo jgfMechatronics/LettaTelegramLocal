@@ -1,12 +1,15 @@
 #!/usr/bin/env python3
 """
-invoke_sonnet.py - Launcher: check singleton lock, open console window, wait, return result.
+invoke_agent.py - Launcher: check singleton lock, open console window, wait, return result.
 
 Usage:
-    python invoke_sonnet.py "your prompt here"
-    python invoke_sonnet.py --cwd C:/Git/LettaSource "your prompt here"
+    python invoke_agent.py sonnet "your prompt here"
+    python invoke_agent.py haiku "your prompt here"
+    python invoke_agent.py sonnet --cwd C:/Git/LettaSource "your prompt here"
 
-Spawns invoke_sonnet_worker.py in a dedicated console window so James has a live
+Agent names are resolved via agents.json in the same directory.
+
+Spawns invoke_agent_worker.py in a dedicated console window so James has a live
 terminal for monitoring and approvals. Blocks until the session completes, then
 prints the final response to stdout for the calling process (e.g. Opus via Bash).
 """
@@ -17,12 +20,12 @@ import subprocess
 import tempfile
 
 # Windows console defaults to cp1252; reconfigure stdout/stderr to UTF-8 so
-# emojis in Sonnet's responses don't cause encoding errors when printing to Opus.
+# emojis in agent responses don't cause encoding errors when printing to caller.
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
 
-LOCK_FILE = os.path.join(tempfile.gettempdir(), "invoke_sonnet.lock")
-WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoke_sonnet_worker.py")
+LOCK_FILE = os.path.join(tempfile.gettempdir(), "invoke_agent.lock")
+WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoke_agent_worker.py")
 
 
 # ── Singleton lock ─────────────────────────────────────────────────────────────
@@ -30,7 +33,7 @@ WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoke
 def acquire_lock() -> bool:
     """Returns True if lock acquired, False if another session is already running."""
     if os.path.exists(LOCK_FILE):
-        print(f"[invoke_sonnet] ⚠  Already running — delete {LOCK_FILE} to force unlock.")
+        print(f"[invoke_agent] ⚠  Already running — delete {LOCK_FILE} to force unlock.")
         return False
     open(LOCK_FILE, "w").close()
     return True
@@ -47,7 +50,7 @@ def release_lock() -> None:
 
 def make_result_file() -> str:
     """Create a temp file for the worker to write its result to. Returns the path."""
-    fd, path = tempfile.mkstemp(suffix=".txt", prefix="invoke_sonnet_result_")
+    fd, path = tempfile.mkstemp(suffix=".txt", prefix="invoke_agent_result_")
     os.close(fd)
     return path
 
