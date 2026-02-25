@@ -168,15 +168,15 @@ def send_prompt(proc: subprocess.Popen, prompt: str) -> None:
 # ── Message handlers ───────────────────────────────────────────────────────────
 
 def handle_tool_call(msg: dict) -> None:
-    for tc in (msg.get("tool_calls") or []):
-        tool_name = tc.get("function", {}).get("name", "?")
-        raw_args = tc.get("function", {}).get("arguments", "{}")
-        try:
-            args_dict = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-        except json.JSONDecodeError:
-            args_dict = {}
-        print(f"🔧 {tool_name}")
-        print(format_tool_input(tool_name, args_dict))
+    tc = msg.get("tool_call") or {}
+    tool_name = tc.get("name", "?")
+    raw_args = tc.get("arguments", "")
+    try:
+        args_dict = json.loads(raw_args) if raw_args else {}
+    except json.JSONDecodeError:
+        return  # partial streaming chunk — skip until arguments are complete
+    print(f"🔧 {tool_name}")
+    print(format_tool_input(tool_name, args_dict))
 
 
 def handle_tool_return(msg: dict) -> None:
@@ -350,17 +350,30 @@ def run_session(agent_name: str, agent_id: str, letta_url: str, cwd: str, prompt
     proc = launch_letta(cwd, agent_id, letta_url)
     final_response = None
 
+    terminated = False
     try:
         final_response = process_events(proc, prompt, agent_name)
     except KeyboardInterrupt:
         print("\n[worker] Interrupted")
         proc.terminate()
+        terminated = True
+    except Exception as e:
+        print(f"\n[worker] ❌ Unexpected error: {e}")
+        proc.terminate()
+        terminated = True
     finally:
         try:
             proc.stdin.close()
         except Exception:
             pass
-        proc.wait()
+        if terminated:
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        else:
+            proc.wait()
 
     if final_response:
         print(f"\n{'='*60}\nFINAL RESPONSE:\n{'='*60}\n{final_response}\n{'='*60}\n")
