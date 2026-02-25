@@ -159,7 +159,8 @@ def launch_letta(cwd: str, agent_id: str, letta_url: str) -> subprocess.Popen:
 
 def send_prompt(proc: subprocess.Popen, prompt: str) -> None:
     """Send the user's prompt to the Letta process via stdin."""
-    msg = json.dumps({"type": "user", "message": {"role": "user", "content": prompt}})
+    preamble = "[Msg from another Agent]\n\n"
+    msg = json.dumps({"type": "user", "message": {"role": "user", "content": preamble + prompt}})
     proc.stdin.write(msg + "\n")
     proc.stdin.flush()
     print("[worker] Prompt sent — waiting...\n")
