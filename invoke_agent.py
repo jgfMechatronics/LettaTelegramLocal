@@ -33,7 +33,7 @@ WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "invoke
 def acquire_lock() -> bool:
     """Returns True if lock acquired, False if another session is already running."""
     if os.path.exists(LOCK_FILE):
-        print(f"[invoke_agent] ⚠  Already running — delete {LOCK_FILE} to force unlock.")
+        print(f"[invoke_agent] ⚠  Already running — Session may be hung, user intervention required")
         return False
     open(LOCK_FILE, "w").close()
     return True
