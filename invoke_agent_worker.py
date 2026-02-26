@@ -159,7 +159,7 @@ def launch_letta(cwd: str, agent_id: str, letta_url: str) -> subprocess.Popen:
 
 def send_prompt(proc: subprocess.Popen, prompt: str) -> None:
     """Send the user's prompt to the Letta process via stdin."""
-    preamble = "[Msg from another Agent]\n\n"
+    preamble = "[LC HEADLESS MODE INVOCATION FROM OTHER AGENT]\n\n"
     msg = json.dumps({"type": "user", "message": {"role": "user", "content": preamble + prompt}})
     proc.stdin.write(msg + "\n")
     proc.stdin.flush()
