@@ -260,7 +260,7 @@ async def periodic_ping(context):
     2. Parse her response for commands via shared parser
     3. Execute the appropriate action
     """
-    if not hasattr(periodic_ping"_count"):
+    if not hasattr(periodic_ping,"_count"):
         periodic_ping._count = 0
     periodic_ping._count += 1
 
