@@ -21,7 +21,7 @@ ALLOWED_USER_IDS = [int(AUTHORIZED_USER)]
 
 # Letta Code headless config
 LETTA_CWD = os.getenv("LETTA_CWD", "C:/Git")  # Working directory for LC commands
-LETTA_PERMISSION_MODE = os.getenv("LETTA_PERMISSION_MODE", "plan")  # plan, acceptEdits, or yolo
+# LETTA_PERMISSION_MODE = os.getenv("LETTA_PERMISSION_MODE", "plan")  # plan, acceptEdits, or yolo
 
 # Session state (clears on restart)
 authenticated_users = set()
@@ -260,13 +260,27 @@ async def periodic_ping(context):
     2. Parse her response for commands via shared parser
     3. Execute the appropriate action
     """
+    if not hasattr(periodic_ping"_count"):
+        periodic_ping._count = 0
+    periodic_ping._count += 1
+
     timestamp = get_est_timestamp()
     
     # Send the ping to Opus via Letta Code headless
-    prompt = (
-        f"[PERIODIC PING, {timestamp}] Want autonomous time or to text James? "
-        f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\""
+    basicMsg = (
+        f"[PERIODIC PING, {timestamp}] Want Autonomous time OR to text James?\n"
+        f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\"\n"
+        f"Curr Ping Interval: {ping_interval}Sec/Pin\n"
     )
+
+    longPingStopSuggestion = f"If further pings are not desired for now, please invoke the STOP Cmd\n" # also notifies on first ping since it is long
+
+    if ping_interval < 3600*2:
+        prompt = basicMsg + longPingStopSuggestion
+                  
+    else:
+        prompt = basicMsg
+    
     result = run_letta_headless(prompt)
     
     if not result["success"]:
