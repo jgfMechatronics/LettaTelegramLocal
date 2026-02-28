@@ -15,6 +15,14 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 AUTHORIZED_USER = os.getenv("AUTHORIZED_USER")
 TELEGRAM_PASSWORD = os.getenv("TELEGRAM_PASSWORD")
+SKIP_FIRST_PING = os.getenv("SKIP_FIRST_PING")
+if SKIP_FIRST_PING == "True":
+    SKIP_FIRST_PING = True
+elif SKIP_FIRST_PING == "False":
+    SKIP_FIRST_PING = False
+else:
+    raise Exception("invalid value for SKIP_FIRST_PING")
+
 LETTA_BASE_URL = "http://localhost:8283"
 AGENT_ID = "agent-97fff6de-4d5e-4820-b459-0918489b0a02"
 ALLOWED_USER_IDS = [int(AUTHORIZED_USER)]
@@ -30,7 +38,10 @@ authenticated_users = set()
 # Periodic ping state
 # These are module-level so they persist across async calls but reset on script restart
 ping_job = None           # Reference to the scheduled job (so we can cancel/modify it)
+if SKIP_FIRST_PING:
+    ping_interval = 99999
 ping_interval = 4 * 3600  # Default: 4 hours in seconds
+
 headless_mode = False     # When True, use LC headless (tool access); when False, use direct API
 
 def get_est_timestamp():
@@ -94,10 +105,10 @@ def run_letta_headless(prompt: str, timeout: int = 120, agent_id: str = AGENT_ID
         "letta",
         "-p", prompt,
         "--agent", agent_id,
+        "--no-system-info-reminder",  # Disable device/git/cwd context
         "--output-format", "json",
         # Reduce context bloat for headless mode (see: letta --help)
-        "--no-skills",              # Disable skill list injection
-        "--no-system-info-reminder",  # Disable device/git/cwd context
+        "--no-skills"              # Disable skill list injection (not sure if true)
     ]
     
     # Add permission mode (plan = read-only, acceptEdits = auto-approve edits, yolo = all)
@@ -262,24 +273,26 @@ async def periodic_ping(context):
     2. Parse her response for commands via shared parser
     3. Execute the appropriate action
     """
+
     if not hasattr(periodic_ping,"_count"):
         periodic_ping._count = 0
+    if periodic_ping._count == 0 and SKIP_FIRST_PING:
+        return
     periodic_ping._count += 1
 
     timestamp = get_est_timestamp()
     
     # Send the ping to Opus via Letta Code headless
     basicMsg = (
-        f"[PERIODIC PING, {timestamp}] Want Autonomous time OR to text James?\n"
+        f"[SELF WAKE PERIODIC PING, {timestamp}] If desired, you can run commands, call tools, take autonomous time, etc.\n"
         f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\"\n"
         f"Curr Ping Interval: {ping_interval}Sec/Pin\n"
     )
 
     longPingStopSuggestion = f"If further pings are not desired for now, please invoke the STOP Cmd\n" # also notifies on first ping since it is long
 
-    if ping_interval < 3600*2:
+    if ping_interval >= 3600*2:
         prompt = basicMsg + longPingStopSuggestion
-                  
     else:
         prompt = basicMsg
     
