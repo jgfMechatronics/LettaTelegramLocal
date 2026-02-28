@@ -22,6 +22,7 @@ ALLOWED_USER_IDS = [int(AUTHORIZED_USER)]
 # Letta Code headless config
 LETTA_CWD = os.getenv("LETTA_CWD", "C:/Git")  # Working directory for LC commands
 # LETTA_PERMISSION_MODE = os.getenv("LETTA_PERMISSION_MODE", "plan")  # plan, acceptEdits, or yolo
+LETTA_PERMISSION_MODE = None
 
 # Session state (clears on restart)
 authenticated_users = set()
@@ -100,10 +101,11 @@ def run_letta_headless(prompt: str, timeout: int = 120, agent_id: str = AGENT_ID
     ]
     
     # Add permission mode (plan = read-only, acceptEdits = auto-approve edits, yolo = all)
-    if LETTA_PERMISSION_MODE == "yolo":
-        cmd.append("--yolo")
-    else:
-        cmd.extend(["--permission-mode", LETTA_PERMISSION_MODE])
+    if LETTA_PERMISSION_MODE != None:
+        if LETTA_PERMISSION_MODE == "yolo":
+            cmd.append("--yolo")
+        else:
+            cmd.extend(["--permission-mode", LETTA_PERMISSION_MODE])
     
     try:
         result = subprocess.run(
