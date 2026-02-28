@@ -40,7 +40,8 @@ authenticated_users = set()
 ping_job = None           # Reference to the scheduled job (so we can cancel/modify it)
 if SKIP_FIRST_PING:
     ping_interval = 99999
-ping_interval = 4 * 3600  # Default: 4 hours in seconds
+else:
+    ping_interval = 4 * 3600  # Default: 4 hours in seconds
 
 headless_mode = False     # When True, use LC headless (tool access); when False, use direct API
 
