@@ -89,8 +89,8 @@ def run_letta_headless(prompt: str, timeout: int = 120, agent_id: str = AGENT_ID
     """
     Run Letta Code headless and return parsed JSON response.
     
-    Uses subprocess instead of API for tool access (Bash, Edit, Read, etc).
-    Permission mode is configurable via LETTA_PERMISSION_MODE env var.
+    Uses stream-json mode with stdin/stdout (same as invoke_agent_worker)
+    for reliable flag handling on Windows.
     
     Args:
         prompt: The message to send to the agent
@@ -103,52 +103,109 @@ def run_letta_headless(prompt: str, timeout: int = 120, agent_id: str = AGENT_ID
       - conversation_id: str (for continuity, if successful)
     """
     cmd = [
-        "letta",
-        "-p", prompt,
+        "letta.cmd",
         "--agent", agent_id,
-        "--no-system-info-reminder",  # Disable device/git/cwd context
-        "--output-format", "json",
-        # Reduce context bloat for headless mode (see: letta --help)
-        "--no-skills"              # Disable skill list injection (not sure if true)
+        "--input-format", "stream-json",
+        "--output-format", "stream-json",
+        "--no-skills",
+        "--no-system-info-reminder",
     ]
     
     # Add permission mode (plan = read-only, acceptEdits = auto-approve edits, yolo = all)
-    if LETTA_PERMISSION_MODE != None:
+    if LETTA_PERMISSION_MODE is not None:
         if LETTA_PERMISSION_MODE == "yolo":
             cmd.append("--yolo")
         else:
             cmd.extend(["--permission-mode", LETTA_PERMISSION_MODE])
     
     try:
-        result = subprocess.run(
+        proc = subprocess.Popen(
             cmd,
-            capture_output=True,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+            encoding='utf-8',
+            env={**os.environ, "LETTA_CODE_AGENT_ROLE": "subagent"},
             cwd=LETTA_CWD,
-            shell=True,  # Required on Windows to find letta via PATH
-            encoding='utf-8',  # Handle non-ASCII chars (emojis, etc.)
-            env={**os.environ, "LETTA_CODE_AGENT_ROLE": "subagent"},  # Minimal reminders + default conversation
         )
         
-        if result.returncode != 0:
-            return {
-                "success": False,
-                "result": f"LC error (exit {result.returncode}): {result.stderr or result.stdout}",
-                "conversation_id": None
-            }
+        # Read events until we get init, then send prompt
+        final_result = None
+        conversation_id = None
+        prompt_sent = False
+        assistant_text = ""
         
-        data = json.loads(result.stdout)
+        import time
+        start_time = time.time()
+        
+        while True:
+            # Check timeout
+            if time.time() - start_time > timeout:
+                proc.terminate()
+                return {"success": False, "result": "Request timed out", "conversation_id": None}
+            
+            line = proc.stdout.readline()
+            if not line:
+                # Process ended
+                break
+            
+            line = line.strip()
+            if not line:
+                continue
+                
+            try:
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            
+            msg_type = msg.get("type", "")
+            
+            if msg_type == "system" and msg.get("subtype") == "init" and not prompt_sent:
+                # Send the prompt
+                prompt_msg = json.dumps({
+                    "type": "user",
+                    "message": {"role": "user", "content": prompt}
+                })
+                proc.stdin.write(prompt_msg + "\n")
+                proc.stdin.flush()
+                prompt_sent = True
+            
+            elif msg_type == "message":
+                if msg.get("message_type") == "assistant_message":
+                    content = msg.get("content", "")
+                    if isinstance(content, str):
+                        assistant_text += content  # Accumulate chunks
+                    elif isinstance(content, list):
+                        # Extract text from content blocks
+                        for item in content:
+                            if isinstance(item, dict) and item.get("type") == "text":
+                                assistant_text += item.get("text", "")
+            
+            elif msg_type == "result":
+                conversation_id = msg.get("conversation_id")
+                final_result = assistant_text or msg.get("result", "")
+                break
+            
+            elif msg_type == "error":
+                return {
+                    "success": False,
+                    "result": f"Letta error: {msg.get('message', 'unknown')}",
+                    "conversation_id": None
+                }
+        
+        proc.stdin.close()
+        proc.wait(timeout=5)
+        
         return {
             "success": True,
-            "result": data.get("result", ""),
-            "conversation_id": data.get("conversation_id")
+            "result": final_result or "",
+            "conversation_id": conversation_id
         }
         
     except subprocess.TimeoutExpired:
+        proc.kill()
         return {"success": False, "result": "Request timed out", "conversation_id": None}
-    except json.JSONDecodeError as e:
-        return {"success": False, "result": f"JSON parse error: {e}", "conversation_id": None}
     except Exception as e:
         return {"success": False, "result": f"Unexpected error: {e}", "conversation_id": None}
 
@@ -291,7 +348,7 @@ async def periodic_ping(context):
     basicMsg = (
         f"[SELF WAKE PERIODIC PING, {timestamp}] If desired, you can run commands, call tools, take autonomous time, etc.\n"
         f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\"\n"
-        f"Curr Ping Interval: {ping_interval}Sec/Pin\n"
+        f"Curr Ping Interval: {ping_interval}Sec/Ping\n"
     )
 
     longPingStopSuggestion = f"If further pings are not desired for now, please invoke the STOP Cmd\n" # also notifies on first ping since it is long
