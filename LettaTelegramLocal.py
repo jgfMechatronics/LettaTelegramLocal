@@ -245,9 +245,13 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
                 first=ping_interval
             )
             executed["SET_INTERVAL"] = ping_interval
-            print(f"Interval updated to {ping_interval} seconds")
+            alertStr = f"Interval updated to {ping_interval} seconds"
+            print(alertStr)
+            send_alert_to_opus(alertStr)
         else:
-            print(f"Invalid interval in: {opus_response[:100]}")
+            failureStr = f"Invalid interval in: {opus_response[:100]}"
+            print(failureStr)
+            send_alert_to_opus(failureStr)
     
     # AUTONOMOUS and SKIP are informational (must be on their own line)
     if re.search(r'^\s*AUTONOMOUS\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
@@ -277,9 +281,9 @@ async def periodic_ping(context):
 
     if not hasattr(periodic_ping,"_count"):
         periodic_ping._count = 0
-    if periodic_ping._count == 0 and SKIP_FIRST_PING:
-        return
     periodic_ping._count += 1
+    if periodic_ping._count == 1 and SKIP_FIRST_PING:
+        return
 
     timestamp = get_est_timestamp()
     
