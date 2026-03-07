@@ -22,6 +22,7 @@ import json
 import subprocess
 import argparse
 import time
+import platform
 
 sys.stdout.reconfigure(encoding="utf-8")
 sys.stderr.reconfigure(encoding="utf-8")
@@ -136,8 +137,10 @@ def launch_letta(cwd: str, agent_id: str, letta_url: str) -> subprocess.Popen:
     """Start the Letta headless process and return it."""
     permission_mode = read_permission_mode()
     print(f"[worker] Permission mode: {permission_mode}")
+    # letta.cmd on Windows, letta on Linux/Mac
+    letta_cmd = "letta.cmd" if platform.system() == "Windows" else "letta"
     cmd = [
-        "letta.cmd",
+        letta_cmd,
         "--agent", agent_id,
         "--input-format", "stream-json",
         "--output-format", "stream-json",
@@ -397,7 +400,8 @@ def parse_args():
 def main() -> int:
     args = parse_args()
     agent = resolve_agent(args.agent_name)
-    letta_url = f"http://localhost:{agent['port']}"
+    # Use LETTA_BASE_URL env var if set (e.g., in Docker), else construct from localhost
+    letta_url = os.environ.get("LETTA_BASE_URL") or f"http://localhost:{agent['port']}"
 
     exit_code, final_response = run_session(
         agent_name=args.agent_name,

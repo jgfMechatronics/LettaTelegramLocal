@@ -18,6 +18,7 @@ import sys
 import os
 import subprocess
 import tempfile
+import platform
 
 # Windows console defaults to cp1252; reconfigure stdout/stderr to UTF-8 so
 # emojis in agent responses don't cause encoding errors when printing to caller.
@@ -75,10 +76,12 @@ def main() -> int:
     child_cmd = [sys.executable, WORKER_SCRIPT] + sys.argv[1:] + ["--result-file", result_file]
 
     try:
-        proc = subprocess.Popen(
-            child_cmd,
-            creationflags=subprocess.CREATE_NEW_CONSOLE,
-        )
+        # CREATE_NEW_CONSOLE is Windows-only; on Linux we just run without it
+        popen_kwargs = {"args": child_cmd}
+        if platform.system() == "Windows":
+            popen_kwargs["creationflags"] = subprocess.CREATE_NEW_CONSOLE
+        
+        proc = subprocess.Popen(**popen_kwargs)
         proc.wait()
     finally:
         release_lock()
