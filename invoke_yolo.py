@@ -55,21 +55,31 @@ def main():
     preamble = "[YOLO HEADLESS INVOCATION FROM SIBLING AGENT]\n\n"
     full_prompt = preamble + args.prompt
 
+    TIMEOUT_SECONDS = 300  # 5 minutes — must be less than LC Bash's 600s max
+
     # That's it. Just call letta with -p flag.
-    result = subprocess.run(
-        [
-            "letta",
-            "--agent", agent_id,
-            "-p", full_prompt,
-            "--permission-mode", "bypassPermissions",
-            "--no-skills",
-            "--no-system-info-reminder"
-        ],
-        cwd=args.cwd,
-        env={**os.environ, "LETTA_BASE_URL": letta_url},
-        capture_output=True,
-        text=True,
-    )
+    try:
+        result = subprocess.run(
+            [
+                "letta",
+                "--agent", agent_id,
+                "-p", full_prompt,
+                "--permission-mode", "bypassPermissions",
+                "--no-skills",
+                "--no-system-info-reminder"
+            ],
+            cwd=args.cwd,
+            env={**os.environ, "LETTA_BASE_URL": letta_url},
+            capture_output=True,
+            text=True,
+            timeout=TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as e:
+        # Print whatever partial output arrived before the timeout
+        if e.stdout:
+            print(e.stdout)
+        print(f"[invoke_yolo: timed out after {TIMEOUT_SECONDS}s]", file=sys.stderr)
+        sys.exit(1)
 
     # Output response (stdout), errors go to stderr
     if result.stdout:
