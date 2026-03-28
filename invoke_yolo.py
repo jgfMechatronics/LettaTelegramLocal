@@ -25,20 +25,38 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 AGENTS_JSON_PATH = os.path.join(SCRIPT_DIR, "agents.json")
 
 
-def resolve_agent(name: str) -> str:
-    """Look up agent ID by name from agents.json."""
+def load_agent_registry() -> dict:
+    """Load agents.json registry."""
     try:
         with open(AGENTS_JSON_PATH, "r") as f:
-            registry = json.load(f)
+            return json.load(f)
     except (FileNotFoundError, json.JSONDecodeError) as e:
         print(f"Error loading agents.json: {e}", file=sys.stderr)
         sys.exit(1)
-    
+
+
+def resolve_agent(name: str, registry: dict) -> str:
+    """Look up agent ID by name from registry."""
     if name not in registry:
         print(f"Unknown agent: {name}. Available: {', '.join(registry.keys())}", file=sys.stderr)
         sys.exit(1)
     
     return registry[name]["agent_id"]
+
+
+def get_invoker_name(registry: dict) -> str:
+    """Get the name of the invoking agent from AGENT_ID env var."""
+    invoker_id = os.environ.get("AGENT_ID")
+    if not invoker_id:
+        return "unknown agent"
+    
+    # Reverse lookup: find name by agent_id
+    for name, info in registry.items():
+        if info.get("agent_id") == invoker_id:
+            return name.capitalize()
+    
+    # Fallback: return truncated ID if not in registry
+    return f"agent {invoker_id[:12]}..."
 
 
 def main():
@@ -48,11 +66,13 @@ def main():
     parser.add_argument("--cwd", default="/workspace/git", help="Working directory")
     args = parser.parse_args()
 
-    agent_id = resolve_agent(args.agent_name)
+    registry = load_agent_registry()
+    agent_id = resolve_agent(args.agent_name, registry)
+    invoker_name = get_invoker_name(registry)
     letta_url = os.environ.get("LETTA_BASE_URL", "http://host.docker.internal:8283")
 
-    # Preamble tells invoked agent to be concise (reduces context bloat)
-    preamble = "[YOLO HEADLESS INVOCATION FROM SIBLING AGENT]\n\n"
+    # Preamble identifies invoking agent
+    preamble = f"[YOLO HEADLESS INVOCATION FROM {invoker_name.upper()}]\n\n"
     full_prompt = preamble + args.prompt
 
     TIMEOUT_SECONDS = 300  # 5 minutes — must be less than LC Bash's 600s max
