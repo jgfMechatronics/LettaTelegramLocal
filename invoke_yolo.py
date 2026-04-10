@@ -75,7 +75,7 @@ def main():
     preamble = f"[YOLO HEADLESS INVOCATION FROM {invoker_name.upper()}]\n\n"
     full_prompt = preamble + args.prompt
 
-    TIMEOUT_SECONDS = 300  # 5 minutes — must be less than LC Bash's 600s max
+    TIMEOUT_SECONDS = 480  # 8 minutes — must be less than LC Bash's 600s max
 
     # That's it. Just call letta with -p flag.
     try:
