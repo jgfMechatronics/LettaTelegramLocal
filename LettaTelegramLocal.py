@@ -247,7 +247,7 @@ def send_message_direct(message: str) -> dict:
         return {"success": False, "result": str(e)}
 
 
-async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, current_job=None):
+async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, current_job=None, application=None):
     """
     Parse Opus's response for commands and execute them.
     
@@ -256,7 +256,7 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
     line boundaries.
     
     Commands with arguments use quotes: MESSAGE_JAMES "text", SET_INTERVAL "2 hours"
-    Commands without arguments are keyword-only: STOP, AUTONOMOUS, SKIP
+    Commands without arguments are keyword-only: STOP, AUTONOMOUS, SKIP, KILL_TELEGRAM
     
     Returns dict of executed commands for logging/debugging.
     """
@@ -317,6 +317,17 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
     if re.search(r'^\s*SKIP\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
         executed["SKIP"] = True
         print("Opus skipped this ping")
+    
+    # KILL_TELEGRAM — emergency shutdown of the Telegram bridge
+    # Security feature: if something seems wrong (spammer, compromised auth), Opus can kill the link
+    if re.search(r'^\s*KILL_TELEGRAM\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
+        executed["KILL_TELEGRAM"] = True
+        print("!!! KILL_TELEGRAM invoked — shutting down Telegram bridge !!!")
+        # Alert before shutdown so it's in the conversation history
+        send_alert_to_opus("[KILL_TELEGRAM EXECUTED] Telegram bridge shutting down. Restart manually when safe.")
+        # Graceful shutdown — this will stop polling and exit run_polling()
+        if application:
+            application.stop_running()
         
     return executed
 
@@ -371,7 +382,8 @@ async def periodic_ping(context):
         opus_response,
         bot=context.bot,
         job_queue=context.job_queue,
-        current_job=context.job
+        current_job=context.job,
+        application=context.application
     )
     
     if not executed:
@@ -407,7 +419,8 @@ async def handle_message(update: Update, context):
             opus_response,
             bot=context.bot,
             job_queue=context.application.job_queue,
-            current_job=ping_job
+            current_job=ping_job,
+            application=context.application
         )
         
         if opus_response:
