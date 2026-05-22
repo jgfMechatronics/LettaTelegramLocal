@@ -41,6 +41,11 @@ DEFAULT_AGENTS = ["opus", "sonnet"]
 TIMEOUT_SECONDS = 480
 SEPARATOR_WIDTH = 60
 
+GC_REMINDER = """**GC Reminders:**
+- Use `<gc>` tags for your messages
+- Simple file reads / web searches relevant to discussion = fine. Save proper agentic work for when James says we're back in normal LC (long agent turns interrupt conversation flow)
+- Only the LAST message in a turn is captured for GC. If you get a compaction warning after trying to send a GC message: do your consolidation, then REPEAT your GC message (with tags) to end the turn."""
+
 
 def load_agent_registry() -> dict:
     try:
@@ -159,6 +164,7 @@ def main():
     last_seen: dict[str, int] = {name: 0 for name, _ in agents}  # track where each agent last saw
     turn = 0
     consecutive_skips = 0
+    reminder_injected = False
     prompt_session = _make_prompt_session()
 
     while True:
@@ -185,6 +191,10 @@ def main():
                     continue  # re-prompt James without advancing turn
             else:
                 consecutive_skips = 0
+                # Inject GC reminder before first real message from James
+                if not reminder_injected:
+                    thread.append(("System", GC_REMINDER))
+                    reminder_injected = True
                 thread.append(("james", user_input))
 
         else:
