@@ -14,7 +14,7 @@ Usage:
 
 Commands:
     skip, pass, s, or empty  - Let agents continue without adding a message
-    quit, exit               - End the chat
+    /quit, /exit             - End the chat
 
 TODO: load_agent_registry and agent resolution duplicate invoke_yolo.py.
       Extract to a shared agents_registry.py module when convenient.
@@ -109,19 +109,22 @@ def extract_gc(response: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
+GC_HEADER = "[GROUP CHAT. Use <gc>your-reply</gc> to respond. Leave wrapper off to pass. Avoid agentic action in response to this message]"
+
+
 def format_thread_for_agent(thread: list[tuple[str, str]]) -> str:
     """Format conversation thread for sending to an agent.
     
     Each entry is (speaker_name, message). Output format:
-    [GROUP CHAT]
+    [GROUP CHAT. Use <gc>your-reply</gc> to respond. ...]
     [James]: Hello everyone
     [Opus]: Hey! What's up?
     [Sonnet]: Hi there!
     """
     if not thread:
-        return "[GROUP CHAT]\n(no messages yet)"
+        return f"{GC_HEADER}\n(no messages yet)"
     
-    lines = ["[GROUP CHAT]"]
+    lines = [GC_HEADER]
     for speaker, message in thread:
         lines.append(f"[{speaker.capitalize()}]: {message}")
     return "\n".join(lines)
@@ -158,7 +161,7 @@ def main():
     participants = ["james"] + [name for name, _ in agents]
     agent_list = ", ".join(name.capitalize() for name in participants[1:])
     print(f"Group chat — {agent_list}")
-    print("Type a message, 'skip' (or 's'/Enter) to let agents continue, 'quit' to exit.\n")
+    print("Type a message, 'skip' (or 's'/Enter) to let agents continue, '/quit' to exit.\n")
 
     thread: list[tuple[str, str]] = []
     last_seen: dict[str, int] = {name: 0 for name, _ in agents}  # track where each agent last saw
@@ -180,7 +183,7 @@ def main():
                 print("\nExiting.")
                 break
 
-            if user_input.lower() in ("quit", "exit"):
+            if user_input.lower() in ("/quit", "/exit"):
                 print("Exiting.")
                 break
             elif user_input.lower() in ("skip", "pass", "s", ""):
