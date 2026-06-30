@@ -28,7 +28,7 @@ AGENT_ID = "agent-97fff6de-4d5e-4820-b459-0918489b0a02"
 ALLOWED_USER_IDS = [int(AUTHORIZED_USER)]
 
 # Letta Code headless config
-LETTA_CWD = os.getenv("LETTA_CWD", "C:/Git")  # Working directory for LC commands
+LETTA_CWD = os.getenv("LETTA_CWD", "/workspace/git")  # Working directory for LC commands
 # LETTA_PERMISSION_MODE = os.getenv("LETTA_PERMISSION_MODE", "plan")  # plan, acceptEdits, or yolo
 LETTA_PERMISSION_MODE = None
 
@@ -369,7 +369,7 @@ async def periodic_ping(context):
     else:
         prompt = basicMsg
     
-    result = run_letta_headless(prompt)
+    result = send_message_direct(prompt)  # Use API directly, no need for headless CLI
     
     if not result["success"]:
         print(f"Ping failed: {result['result']}")

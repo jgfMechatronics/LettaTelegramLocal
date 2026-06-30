@@ -29,7 +29,7 @@ sys.stderr.reconfigure(encoding="utf-8")
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 
-DEFAULT_CWD = os.getenv("LETTA_CWD", "C:/Git")
+DEFAULT_CWD = os.getenv("LETTA_CWD", "/workspace/git")
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DOT_ENV_PATH = os.path.join(SCRIPT_DIR, ".env")
 AGENTS_JSON_PATH = os.path.join(SCRIPT_DIR, "agents.json")

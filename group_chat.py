@@ -109,7 +109,7 @@ def extract_gc(response: str) -> str | None:
     return match.group(1).strip() if match else None
 
 
-GC_HEADER = "[GROUP CHAT. Use <gc>your-reply</gc> to respond. Leave wrapper off to pass. Avoid agentic action in response to this message]"
+GC_HEADER = "[GROUP CHAT. Use <gc>your-reply</gc> on the **last message/action of your turn** to respond. Leave wrapper off to pass. Avoid agentic action in response to this message]"
 
 
 def format_thread_for_agent(thread: list[tuple[str, str]]) -> str:
