@@ -17,3 +17,4 @@ __pycache__/
 Thumbs.db
 
 .letta/
+agents.json
