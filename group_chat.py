@@ -3,7 +3,7 @@
 group_chat.py - Bidirectional multi-agent group chat console.
 
 Round-robin conversation: James and agents take turns. Agents receive only
-NEW messages since their last turn (delta, not full thread — their Letta
+NEW messages since their last turn (delta, not full thread — their Agent Home
 context already has the history). Broadcast responses using <gc>...</gc> tags.
 No tags = pass.
 
@@ -15,9 +15,6 @@ Usage:
 Commands:
     skip, pass, s, or empty  - Let agents continue without adding a message
     /quit, /exit             - End the chat
-
-TODO: load_agent_registry and agent resolution duplicate invoke_yolo.py.
-      Extract to a shared agents_registry.py module when convenient.
 """
 
 import argparse
@@ -25,17 +22,22 @@ import json
 import os
 import platform
 import re
-import subprocess
 import sys
 
+import httpx
+from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
 
 if platform.system() != "Linux":
     print("group_chat.py is for Linux containers only.", file=sys.stderr)
     sys.exit(1)
 
+# Load .env from script directory
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
+
 AGENTS_JSON_PATH = os.path.join(SCRIPT_DIR, "agents.json")
+SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
 DEFAULT_AGENTS = ["opus", "sonnet"]
 TIMEOUT_SECONDS = 480
@@ -67,32 +69,71 @@ def resolve_agents(names: list[str], registry: dict) -> list[tuple[str, str]]:
     return result
 
 
-def send_message(agent_id: str, message: str, letta_url: str) -> str:
-    """Send a message to an agent via the letta CLI and return its response."""
+def send_message(agent_id: str, message: str) -> str:
+    """Send a message to an agent via Agent Home API and return its response.
+    
+    Consumes the SSE stream and accumulates the text response.
+    """
+    url = f"{SERVER_URL}/agents/{agent_id}/messages"
+    accumulated_text = ""
+    in_thinking = False
+    
     try:
-        result = subprocess.run(
-            [
-                "letta",
-                "--agent", agent_id,
-                "-p", message,
-                "--permission-mode", "bypassPermissions",
-                "--no-skills",
-                "--no-system-info-reminder",
-            ],
-            cwd="/workspace/git",
-            env={**os.environ, "LETTA_BASE_URL": letta_url},
-            capture_output=True,
-            text=True,
+        with httpx.stream(
+            "POST",
+            url,
+            json={"message": message},
             timeout=TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired as e:
-        partial = (e.stdout or "").strip()
+        ) as response:
+            if response.status_code != 200:
+                return f"[error: HTTP {response.status_code}]"
+            
+            current_event_type = None
+            data_lines = []
+            
+            for line in response.iter_lines():
+                if line.startswith("event:"):
+                    current_event_type = line[6:].strip()
+                    data_lines = []
+                elif line.startswith("data:"):
+                    data_lines.append(line[5:].strip())
+                elif line == "" and current_event_type:
+                    # End of event - process it
+                    data_str = "\n".join(data_lines)
+                    try:
+                        data = json.loads(data_str) if data_str else {}
+                    except json.JSONDecodeError:
+                        data = {}
+                    
+                    if current_event_type == "PartStartEvent":
+                        part = data.get("part", {})
+                        part_kind = part.get("part_kind")
+                        if part_kind == "thinking":
+                            in_thinking = True
+                        elif part_kind == "text":
+                            in_thinking = False
+                            content = part.get("content", "")
+                            if content:
+                                accumulated_text += content
+                    elif current_event_type == "PartDeltaEvent":
+                        if not in_thinking:
+                            delta = data.get("delta", {})
+                            content = delta.get("content_delta", "")
+                            if content:
+                                accumulated_text += content
+                    elif current_event_type == "Error":
+                        return f"[error: {data.get('message', 'Unknown error')}]"
+                    
+                    current_event_type = None
+                    data_lines = []
+                    
+    except httpx.TimeoutException:
         suffix = f"\n[timed out after {TIMEOUT_SECONDS}s]"
-        return (partial + suffix) if partial else suffix.strip()
-
-    if result.returncode != 0 and result.stderr:
-        return f"[error: {result.stderr.strip()}]"
-    return result.stdout.strip()
+        return (accumulated_text + suffix) if accumulated_text else suffix.strip()
+    except httpx.RequestError as e:
+        return f"[error: {e}]"
+    
+    return accumulated_text.strip()
 
 
 def print_separator(label: str) -> None:
@@ -131,16 +172,12 @@ def format_thread_for_agent(thread: list[tuple[str, str]]) -> str:
 
 
 def _make_prompt_session() -> PromptSession:
-    """Create a PromptSession with arrow key and history support.
-
-    Note: Shift+Enter newline insertion is not supported in prompt_toolkit 3.0.36
-    (ShiftEnter absent from Keys enum). Deferred for a future upgrade or workaround.
-    """
+    """Create a PromptSession with arrow key and history support."""
     return PromptSession()
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Group chat with multiple Letta agents")
+    parser = argparse.ArgumentParser(description="Group chat with multiple agents")
     parser.add_argument(
         "--agents", nargs="+", default=DEFAULT_AGENTS,
         metavar="AGENT",
@@ -156,7 +193,6 @@ def main():
     registry = load_agent_registry()
     agents = resolve_agents(args.agents, registry)
     agent_ids = {name: agent_id for name, agent_id in agents}
-    letta_url = os.environ.get("LETTA_BASE_URL", "http://host.docker.internal:8283")
 
     participants = ["james"] + [name for name, _ in agents]
     agent_list = ", ".join(name.capitalize() for name in participants[1:])
@@ -164,7 +200,7 @@ def main():
     print("Type a message, 'skip' (or 's'/Enter) to let agents continue, '/quit' to exit.\n")
 
     thread: list[tuple[str, str]] = []
-    last_seen: dict[str, int] = {name: 0 for name, _ in agents}  # track where each agent last saw
+    last_seen: dict[str, int] = {name: 0 for name, _ in agents}
     turn = 0
     consecutive_skips = 0
     reminder_injected = False
@@ -177,8 +213,7 @@ def main():
             print_separator("james")
             prompt = "> " if consecutive_skips == 0 else f"(skipped {consecutive_skips}/{args.max_skips}) > "
             try:
-                # Replace Shift+Enter CSI u sequence (escape stripped by terminal) with newline
-                user_input = prompt_session.prompt(prompt).replace("[13;2u", "\n").strip()
+                user_input = prompt_session.prompt(prompt).strip()
             except (KeyboardInterrupt, EOFError):
                 print("\nExiting.")
                 break
@@ -191,10 +226,9 @@ def main():
                 if consecutive_skips >= args.max_skips:
                     print(f"[{args.max_skips} consecutive skips — type a message to continue]")
                     consecutive_skips = 0
-                    continue  # re-prompt James without advancing turn
+                    continue
             else:
                 consecutive_skips = 0
-                # Inject GC reminder before first real message from James
                 if not reminder_injected:
                     thread.append(("System", GC_REMINDER))
                     reminder_injected = True
@@ -203,10 +237,9 @@ def main():
         else:
             agent_id = agent_ids[current]
             print_separator(current)
-            # Only send messages since this agent's last turn (delta, not full thread)
             new_messages = thread[last_seen[current]:]
-            raw = send_message(agent_id, format_thread_for_agent(new_messages), letta_url)
-            last_seen[current] = len(thread)  # update before appending response
+            raw = send_message(agent_id, format_thread_for_agent(new_messages))
+            last_seen[current] = len(thread)
             gc_content = extract_gc(raw)
             if gc_content:
                 print(gc_content)
@@ -218,8 +251,7 @@ def main():
 
 
 if __name__ == "__main__":
-    if os.environ.get("AGENT_ID"):
-        print("group_chat.py must be run from James's terminal, not from a Letta Code session.")
-        print("Launch it from Windows/host: python3 /workspace/git/LettaTelegramLocal/group_chat.py")
+    if os.path.exists("/.dockerenv"):
+        print("group_chat.py must be run from James's terminal, not from inside a container.")
         sys.exit(1)
     main()
