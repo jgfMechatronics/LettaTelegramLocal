@@ -239,13 +239,13 @@ def main():
             print_separator(current)
             new_messages = thread[last_seen[current]:]
             raw = send_message(agent_id, format_thread_for_agent(new_messages))
-            last_seen[current] = len(thread)
             gc_content = extract_gc(raw)
             if gc_content:
                 print(gc_content)
                 thread.append((current, gc_content))
             else:
                 print("[passed]")
+            last_seen[current] = len(thread)
 
         turn += 1
 
