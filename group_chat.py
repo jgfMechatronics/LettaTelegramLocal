@@ -45,7 +45,7 @@ SEPARATOR_WIDTH = 60
 
 GC_REMINDER = """**GC Reminders:**
 - Use `<gc>` tags for your messages
-- Simple file reads / web searches relevant to discussion = fine. Save proper agentic work for when James says we're back in normal LC (long agent turns interrupt conversation flow)
+- Simple file reads / web searches relevant to discussion = fine. Save proper agentic work for when James says we're back in a normal TUI conversation (long agent turns interrupt conversation flow)
 - Only the LAST message in a turn is captured for GC. If you get a compaction warning after trying to send a GC message: do your consolidation, then REPEAT your GC message (with tags) to end the turn."""
 
 
