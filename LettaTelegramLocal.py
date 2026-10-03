@@ -106,16 +106,70 @@ def is_authorized_user(id: int):
     return id in ALLOWED_USER_IDS
 
 
-async def send_message(message: str) -> dict:
+TELEGRAM_TAG = "telegram"
+TELEGRAM_CHUNK_LIMIT = 4096  # Telegram message size limit
+
+
+def _chunk(text: str, limit: int) -> list[str]:
+    """Split text into chunks of at most `limit` characters."""
+    return [text[i:i + limit] for i in range(0, len(text), limit)]
+
+
+class TelegramTagSender:
+    """Scans accumulated agent output for <telegram>...</telegram> tags and
+    sends each complete tag's content as a Telegram message as it closes.
+
+    This gives the agent progressive-update control over long agentic runs:
+    wrap output in tags and it reaches the user immediately, mid-run;
+    leave it untagged and it stays private (with a full-text fallback when
+    a run produces no tags at all).
+    """
+    def __init__(self, bot, chat_id: int):
+        self.bot = bot
+        self.chat_id = chat_id
+        self.sent_count = 0
+
+    async def scan(self, buffer: str) -> None:
+        """Send any newly-closed tags since the last scan."""
+        if self.chat_id not in authenticated_users:
+            return  # unauthenticated target — drop silently
+        pattern = rf"<{TELEGRAM_TAG}>(.*?)</{TELEGRAM_TAG}>"
+        matches = re.findall(pattern, buffer, re.DOTALL | re.IGNORECASE)
+        for content in matches[self.sent_count:]:
+            content = content.strip()
+            if content:
+                for chunk in _chunk(content, TELEGRAM_CHUNK_LIMIT):
+                    await self.bot.send_message(chat_id=self.chat_id, text=chunk)
+            self.sent_count += 1
+
+
+async def send_message(message: str, bot=None, chat_id: int | None = None) -> dict:
     """Send a message to the agent and return its response.
 
-    Returns dict with 'success' and 'result' keys.
+    Returns dict with 'success', 'result', and 'updates_sent' keys.
+
+    When bot and chat_id are provided, <telegram>...</telegram> tags in the
+    agent's output are sent to Telegram progressively as they complete.
+    updates_sent counts those sends; callers use it to decide whether the
+    final full-text reply is still needed (zero tags = fallback to full text).
     """
+    tag_sender = TelegramTagSender(bot, chat_id) if bot is not None else None
+
+    async def on_text_delta(buffer: str) -> None:
+        await tag_sender.scan(buffer)
+
     try:
-        text = await send_message_async(SERVER_URL, AGENT_ID, message, MESSAGE_TIMEOUT_SECONDS)
-        return {"success": True, "result": text}
+        text = await send_message_async(
+            SERVER_URL, AGENT_ID, message, MESSAGE_TIMEOUT_SECONDS,
+            on_text_delta=on_text_delta if tag_sender else None,
+        )
+        return {
+            "success": True,
+            "result": text,
+            "updates_sent": tag_sender.sent_count if tag_sender else 0,
+        }
     except AgentStreamError as e:
-        return {"success": False, "result": str(e)}
+        return {"success": False, "result": str(e), "updates_sent": 0}
 
 
 async def send_alert_to_opus(message: str):
@@ -249,7 +303,7 @@ async def periodic_ping(context):
     else:
         prompt = basicMsg
 
-    result = await send_message(prompt)
+    result = await send_message(prompt, bot=context.bot, chat_id=int(AUTHORIZED_USER))
 
     if not result["success"]:
         print(f"Ping failed: {result['result']}")
@@ -284,7 +338,7 @@ async def handle_message(update: Update, context):
     timestamp = get_est_timestamp()
     formatted_message = f"[via Telegram, {timestamp}] {user_message}"
 
-    result = await send_message(formatted_message)
+    result = await send_message(formatted_message, bot=context.bot, chat_id=update.message.chat_id)
 
     if result["success"]:
         opus_response = result["result"]
@@ -299,7 +353,9 @@ async def handle_message(update: Update, context):
             application=context.application
         )
 
-        if opus_response:
+        if result["updates_sent"] > 0:
+            pass  # <telegram> tag sends already delivered content progressively
+        elif opus_response:
             await update.message.reply_text(opus_response)
         else:
             await update.message.reply_text("[No response from agent]")

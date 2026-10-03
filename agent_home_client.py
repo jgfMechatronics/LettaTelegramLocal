@@ -14,6 +14,7 @@ whatever text accumulated plus a notice (partial response beats none).
 """
 
 import json
+from collections.abc import Awaitable, Callable
 
 import httpx
 
@@ -84,11 +85,16 @@ def _timeout_text(acc: _ResponseAccumulator, timeout_seconds: float) -> str:
 
 
 async def send_message_async(server_url: str, agent_id: str, message: str,
-                             timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS) -> str:
+                             timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+                             on_text_delta: Callable[[str], Awaitable[None]] | None = None) -> str:
     """Send a message and return the agent's text response (thinking excluded).
 
     Raises AgentStreamError on hard failures. On timeout, returns partial
     text plus a notice.
+
+    on_text_delta: optional async callback invoked with the full accumulated
+    text buffer after each text delta. Enables progressive consumption of
+    output mid-run (e.g. the telegram bridge's tag scanner).
     """
     url = f"{server_url}/agents/{agent_id}/messages"
     acc = _ResponseAccumulator()
@@ -99,9 +105,12 @@ async def send_message_async(server_url: str, agent_id: str, message: str,
                     detail = (await response.aread()).decode(errors="replace")[:200]
                     raise AgentStreamError(f"HTTP {response.status_code}: {detail}")
                 async for line in response.aiter_lines():
+                    parts_before = len(acc.text_parts)
                     acc.feed(line)
                     if acc.error is not None:
                         raise AgentStreamError(acc.error)
+                    if on_text_delta is not None and len(acc.text_parts) != parts_before:
+                        await on_text_delta("".join(acc.text_parts))
     except httpx.TimeoutException:
         return _timeout_text(acc, timeout_seconds)
     except httpx.RequestError as e:

@@ -81,7 +81,7 @@ class FakeBot:
     def __init__(self):
         self.sent = []
 
-    async def send_message(self, chat_id, text):
+    async def send_message(self, chat_id=None, text=None):
         self.sent.append((chat_id, text))
 
 
@@ -142,8 +142,70 @@ async def main():
     await test_send_message(agent_id)
     await test_bridge_wrappers(agent_id)
     await test_not_found_error()
+    await test_tag_sender_unit()
+    await test_tag_progressive_live(agent_id)
     await test_commands()
     print("\n=== ALL TESTS PASSED ===")
+
+
+async def test_tag_sender_unit():
+    """TelegramTagSender: progressive sends as tags close, none for partials.
+
+    Mirrors the real contract: scan() receives the full accumulated buffer
+    each time (it grows as the run streams).
+    """
+    bridge.authenticated_users.add(int(bridge.AUTHORIZED_USER))
+    bot = FakeBot()
+    chat_id = int(bridge.AUTHORIZED_USER)
+    sender = bridge.TelegramTagSender(bot, chat_id)
+
+    # Partial tag — not sent yet
+    buffer = "working on it... <telegram>progress update"
+    await sender.scan(buffer)
+    assert sender.sent_count == 0 and bot.sent == [], (sender.sent_count, bot.sent)
+
+    # Tag closes — sent, untagged preamble NOT sent
+    buffer += "</telegram> more private notes..."
+    await sender.scan(buffer)
+    assert sender.sent_count == 1, sender.sent_count
+    assert bot.sent == [(chat_id, "progress update")], bot.sent
+
+    # Second tag closes — progressive: only the new one
+    buffer += "<telegram>second update</telegram>"
+    await sender.scan(buffer)
+    assert sender.sent_count == 2
+    assert bot.sent[-1] == (chat_id, "second update"), bot.sent
+    print(f"[PASS] TelegramTagSender unit: partials held, completes sent progressively ({sender.sent_count} sends)")
+
+
+async def test_tag_progressive_live(agent_id):
+    """Live: agent wraps output in tags → sent progressively, updates_sent=1."""
+    bridge.SERVER_URL = SERVER_URL
+    bridge.AGENT_ID = agent_id
+    bridge.authenticated_users.add(int(bridge.AUTHORIZED_USER))
+    bot = FakeBot()
+    chat_id = int(bridge.AUTHORIZED_USER)
+
+    result = await bridge.send_message(
+        'Reply with exactly: <telegram>TAGGED_LIVE_OK</telegram> and nothing else.',
+        bot=bot,
+        chat_id=chat_id,
+    )
+    assert result["success"], f"live tagged send failed: {result['result']}"
+    assert result["updates_sent"] == 1, f"expected 1 update, got {result['updates_sent']}: {result['result']!r}"
+    assert bot.sent and bot.sent[0][1] == "TAGGED_LIVE_OK", bot.sent
+    print(f"[PASS] live progressive tag send: {bot.sent[0][1]!r} (updates_sent=1)")
+
+    # No-tag fallback: updates_sent=0, full text in result
+    result = await bridge.send_message(
+        "Say exactly: UNTAGGED_FALLBACK_OK and nothing else.",
+        bot=bot,
+        chat_id=chat_id,
+    )
+    assert result["success"]
+    assert result["updates_sent"] == 0, f"expected 0 updates, got {result['updates_sent']}"
+    assert "UNTAGGED_FALLBACK_OK" in result["result"], result["result"]
+    print("[PASS] live no-tag fallback: updates_sent=0, full text returned")
 
 
 if __name__ == "__main__":
