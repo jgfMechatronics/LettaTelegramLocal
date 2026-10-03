@@ -108,6 +108,7 @@ dependencies = [
     { name = "prompt-toolkit" },
     { name = "python-dotenv" },
     { name = "python-telegram-bot", extra = ["job-queue"] },
+    { name = "tzdata" },
 ]
 
 [package.metadata]
@@ -116,6 +117,7 @@ requires-dist = [
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },
     { name = "python-telegram-bot", extras = ["job-queue"], specifier = ">=22.0" },
+    { name = "tzdata", specifier = ">=2024.1" },
 ]
 
 [[package]]

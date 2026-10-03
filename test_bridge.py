@@ -33,6 +33,12 @@ SERVER_URL = "http://localhost:8008"
 async def test_registry_resolution():
     agent_id = resolve_agent_id_by_name_sync(SERVER_URL, "opus")  # lowercase — case-insensitive
     print(f"[PASS] registry resolution (sync, lowercase): {agent_id}")
+
+    # Timestamp helper — exercises zoneinfo/tzdata (regression guard: the
+    # /start handler crashed with ZoneInfoNotFoundError when tzdata was absent)
+    ts = bridge.get_est_timestamp()
+    assert "EST" in ts and ":" in ts, f"bad timestamp: {ts!r}"
+    print(f"[PASS] get_est_timestamp: {ts!r}")
     return agent_id
 
 
