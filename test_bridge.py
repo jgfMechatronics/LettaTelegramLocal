@@ -137,6 +137,27 @@ async def test_commands():
     print("[PASS] KILL_TELEGRAM: application.stop_running() called")
 
 
+async def test_format_incoming_message():
+    """First-of-session includes the guide; subsequent get the one-line reminder.
+    Message always on a fresh line after the header."""
+    ts = "Oct 03, 12:58 PM EST"
+    msg = "Hello from telegram"
+
+    first = bridge.format_incoming_message(msg, ts, include_guide=True)
+    assert first.startswith("[TELEGRAM BRIDGE GUIDE"), first[:50]
+    assert "<telegram>...</telegram>" in first, "guide must document the tags"
+    assert "KILL_TELEGRAM" in first and "MESSAGE_JAMES" in first
+    assert f"[via Telegram, {ts}]\n{msg}" in first, "header + message on fresh line"
+    print("[PASS] first-message format: guide included, message on own line")
+
+    later = bridge.format_incoming_message(msg, ts, include_guide=False)
+    assert later.startswith(f"[via Telegram, {ts}]"), later[:50]
+    assert bridge.TELEGRAM_TAG_REMINDER in later
+    assert "GUIDE" not in later
+    assert later.endswith(f"\n{msg}"), "message on fresh line after reminder"
+    print("[PASS] subsequent format: one-line reminder, no guide")
+
+
 async def main():
     agent_id = await test_registry_resolution()
     await test_send_message(agent_id)
@@ -144,6 +165,7 @@ async def main():
     await test_not_found_error()
     await test_tag_sender_unit()
     await test_tag_progressive_live(agent_id)
+    await test_format_incoming_message()
     await test_commands()
     print("\n=== ALL TESTS PASSED ===")
 

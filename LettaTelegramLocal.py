@@ -56,6 +56,41 @@ AGENT_ID = None               # resolved at startup from the agent registry
 
 # Session state (clears on restart)
 authenticated_users = set()
+briefed_users = set()  # users who've received the telegram guide this session
+
+TELEGRAM_GUIDE = """[TELEGRAM BRIDGE GUIDE — first message of this session]
+
+How replies work from here:
+- Your ENTIRE text response is normally relayed to James's phone when your run completes.
+- Wrap content in <telegram>...</telegram> tags to control what's sent:
+  - Tagged content reaches his phone the MOMENT the tag closes — use for immediate
+    acks, progress updates during long tool-using runs, and staged results.
+  - Untagged text stays PRIVATE (he never sees it) once any tag is present.
+  - If your response contains NO tags at all, the full response is sent (safe fallback).
+- Tags are delivered progressively as they close — multiple tags = multiple updates.
+
+Commands (each on its own line in your response):
+- MESSAGE_JAMES "text"   — send him a message (mainly for autonomous time)
+- SET_INTERVAL "2 hours" — change self-wake ping frequency
+- STOP                   — cancel self-wake pings
+- KILL_TELEGRAM          — emergency: kill the telegram bridge (security concerns)
+
+You have your full toolset and permissions here — telegram is a complete door, not a limited one."""
+
+TELEGRAM_TAG_REMINDER = "[TG: wrap sends in <telegram>tags</telegram> — untagged stays private, no tags = full response]"
+
+
+def format_incoming_message(user_message: str, timestamp: str, include_guide: bool) -> str:
+    """Format an incoming telegram message for the agent.
+
+    First message of a session includes the full bridge guide; subsequent
+    messages carry a one-line tag reminder in the header. The user's message
+    always starts on a fresh line after the header.
+    """
+    header = f"[via Telegram, {timestamp}]"
+    if include_guide:
+        return f"{TELEGRAM_GUIDE}\n\n{header}\n{user_message}"
+    return f"{header}\n{TELEGRAM_TAG_REMINDER}\n{user_message}"
 
 # Periodic ping state
 # These are module-level so they persist across async calls but reset on script restart
@@ -336,7 +371,10 @@ async def handle_message(update: Update, context):
 
     user_message = update.message.text
     timestamp = get_est_timestamp()
-    formatted_message = f"[via Telegram, {timestamp}] {user_message}"
+
+    first_of_session = user_id not in briefed_users
+    briefed_users.add(user_id)
+    formatted_message = format_incoming_message(user_message, timestamp, first_of_session)
 
     result = await send_message(formatted_message, bot=context.bot, chat_id=update.message.chat_id)
 
@@ -380,6 +418,7 @@ async def start(update: Update, context):
 
     # Correct password
     authenticated_users.add(user_id)
+    briefed_users.discard(user_id)  # re-auth re-briefs: guide arrives with next message
     await update.message.reply_text("Connected to Opus! Send me a message.")
 
 
