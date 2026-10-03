@@ -218,16 +218,18 @@ async def test_tag_progressive_live(agent_id):
     assert bot.sent and bot.sent[0][1] == "TAGGED_LIVE_OK", bot.sent
     print(f"[PASS] live progressive tag send: {bot.sent[0][1]!r} (updates_sent=1)")
 
-    # No-tag fallback: updates_sent=0, full text in result
+    # No tags: updates_sent=0, nothing sent during run; full text in result
+    # (used for command parsing; handle_message sends only the marker)
     result = await bridge.send_message(
-        "Say exactly: UNTAGGED_FALLBACK_OK and nothing else.",
+        "Say exactly: UNTAGGED_NOT_SENT and nothing else.",
         bot=bot,
         chat_id=chat_id,
     )
     assert result["success"]
     assert result["updates_sent"] == 0, f"expected 0 updates, got {result['updates_sent']}"
-    assert "UNTAGGED_FALLBACK_OK" in result["result"], result["result"]
-    print("[PASS] live no-tag fallback: updates_sent=0, full text returned")
+    assert len(bot.sent) == 1, f"no-tag run must not send: {bot.sent}"
+    assert "UNTAGGED_NOT_SENT" in result["result"], result["result"]
+    print("[PASS] live no-tag run: nothing sent during run, result available for commands")
 
 
 if __name__ == "__main__":

@@ -61,12 +61,13 @@ briefed_users = set()  # users who've received the telegram guide this session
 TELEGRAM_GUIDE = """[TELEGRAM BRIDGE GUIDE — first message of this session]
 
 How replies work from here:
-- Your ENTIRE text response is normally relayed to James's phone when your run completes.
-- Wrap content in <telegram>...</telegram> tags to control what's sent:
-  - Tagged content reaches his phone the MOMENT the tag closes — use for immediate
-    acks, progress updates during long tool-using runs, and staged results.
-  - Untagged text stays PRIVATE (he never sees it) once any tag is present.
-  - If your response contains NO tags at all, the full response is sent (safe fallback).
+- ONLY content you wrap in <telegram>...</telegram> tags is sent to James's phone —
+  delivered the MOMENT the tag closes.
+  - Use tags for: immediate acks, progress updates during long tool-using runs,
+    staged results, and conversational replies.
+  - Untagged text stays PRIVATE (he never sees it).
+  - NO tags in your response = NOTHING is sent (you'll get a "no tagged response"
+    marker on his phone). Always tag what you want delivered.
 - Tags are delivered progressively as they close — multiple tags = multiple updates.
 
 Commands (each on its own line in your response):
@@ -77,7 +78,7 @@ Commands (each on its own line in your response):
 
 You have your full toolset and permissions here — telegram is a complete door, not a limited one."""
 
-TELEGRAM_TAG_REMINDER = "[TG: wrap sends in <telegram>tags</telegram> — untagged stays private, no tags = full response]"
+TELEGRAM_TAG_REMINDER = "[TG: wrap sends in <telegram>tags</telegram> — untagged = private, no tags = nothing sent]"
 
 
 def format_incoming_message(user_message: str, timestamp: str, include_guide: bool) -> str:
@@ -156,8 +157,7 @@ class TelegramTagSender:
 
     This gives the agent progressive-update control over long agentic runs:
     wrap output in tags and it reaches the user immediately, mid-run;
-    leave it untagged and it stays private (with a full-text fallback when
-    a run produces no tags at all).
+    leave it untagged and it stays private. No tags at all = nothing sent.
     """
     def __init__(self, bot, chat_id: int):
         self.bot = bot
@@ -185,8 +185,8 @@ async def send_message(message: str, bot=None, chat_id: int | None = None) -> di
 
     When bot and chat_id are provided, <telegram>...</telegram> tags in the
     agent's output are sent to Telegram progressively as they complete.
-    updates_sent counts those sends; callers use it to decide whether the
-    final full-text reply is still needed (zero tags = fallback to full text).
+    updates_sent counts those sends; callers send nothing when it's zero
+    (no tags = no response — a minimal marker goes out instead).
     """
     tag_sender = TelegramTagSender(bot, chat_id) if bot is not None else None
 
@@ -393,10 +393,10 @@ async def handle_message(update: Update, context):
 
         if result["updates_sent"] > 0:
             pass  # <telegram> tag sends already delivered content progressively
-        elif opus_response:
-            await update.message.reply_text(opus_response)
         else:
-            await update.message.reply_text("[No response from agent]")
+            # No tags = no content sent. Minimal marker so silence is explainable
+            # (distinguishes "agent chose not to send" from "bridge died").
+            await update.message.reply_text("[no tagged response — full output in LC/Nori]")
     else:
         await update.message.reply_text(f"Error: {result['result']}")
 
