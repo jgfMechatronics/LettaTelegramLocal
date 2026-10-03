@@ -22,6 +22,7 @@ from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from telegram import Update
+from telegram.error import TelegramError
 from telegram.ext import Application, MessageHandler, CommandHandler, filters
 
 from agent_home_client import (
@@ -407,6 +408,14 @@ async def start(update: Update, context):
         return
 
     timestamp = get_est_timestamp()
+
+    # Scrub the /start message (it contains a password — attempt or real) from
+    # all synced devices. Deletion is delete-for-everyone within the 48h Bot
+    # API window; auth proceeds regardless of deletion success.
+    try:
+        await update.message.delete()
+    except TelegramError:
+        pass  # best-effort — wrong password attempts still process normally below
 
     # No password provided OR wrong password = same vague response
     if not context.args or context.args[0] != TELEGRAM_PASSWORD:
