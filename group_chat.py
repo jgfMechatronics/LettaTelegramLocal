@@ -18,15 +18,15 @@ Commands:
 """
 
 import argparse
-import json
 import os
 import platform
 import re
 import sys
 
-import httpx
 from dotenv import load_dotenv
 from prompt_toolkit import PromptSession
+
+from agent_home_client import AgentStreamError, resolve_agent_id_by_name_sync, send_message_sync
 
 if platform.system() != "Linux":
     print("group_chat.py is for Linux containers only.", file=sys.stderr)
@@ -36,11 +36,9 @@ if platform.system() != "Linux":
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 load_dotenv(os.path.join(SCRIPT_DIR, ".env"))
 
-AGENTS_JSON_PATH = os.path.join(SCRIPT_DIR, "agents.json")
 SERVER_URL = os.environ.get("SERVER_URL", "http://localhost:8000")
 
 DEFAULT_AGENTS = ["opus", "sonnet"]
-TIMEOUT_SECONDS = 480
 SEPARATOR_WIDTH = 60
 
 GC_REMINDER = """**GC Reminders:**
@@ -49,91 +47,16 @@ GC_REMINDER = """**GC Reminders:**
 - Only the LAST message in a turn is captured for GC. If you get a compaction warning after trying to send a GC message: do your consolidation, then REPEAT your GC message (with tags) to end the turn."""
 
 
-def load_agent_registry() -> dict:
-    try:
-        with open(AGENTS_JSON_PATH) as f:
-            return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError) as e:
-        print(f"Error loading agents.json: {e}", file=sys.stderr)
-        sys.exit(1)
-
-
-def resolve_agents(names: list[str], registry: dict) -> list[tuple[str, str]]:
-    """Resolve agent names to (name, agent_id) pairs. Exits on unknown names."""
-    result = []
-    for name in names:
-        if name not in registry:
-            print(f"Unknown agent: {name!r}. Available: {', '.join(registry.keys())}", file=sys.stderr)
-            sys.exit(1)
-        result.append((name, registry[name]["agent_id"]))
-    return result
-
-
 def send_message(agent_id: str, message: str) -> str:
-    """Send a message to an agent via Agent Home API and return its response.
-    
-    Consumes the SSE stream and accumulates the text response.
+    """Send a message to an agent, returning response or error text.
+
+    Thin wrapper over the shared client — GC treats failures as printable
+    strings rather than exceptions (the chat loop keeps running).
     """
-    url = f"{SERVER_URL}/agents/{agent_id}/messages"
-    accumulated_text = ""
-    in_thinking = False
-    
     try:
-        with httpx.stream(
-            "POST",
-            url,
-            json={"message": message},
-            timeout=TIMEOUT_SECONDS,
-        ) as response:
-            if response.status_code != 200:
-                return f"[error: HTTP {response.status_code}]"
-            
-            current_event_type = None
-            data_lines = []
-            
-            for line in response.iter_lines():
-                if line.startswith("event:"):
-                    current_event_type = line[6:].strip()
-                    data_lines = []
-                elif line.startswith("data:"):
-                    data_lines.append(line[5:].strip())
-                elif line == "" and current_event_type:
-                    # End of event - process it
-                    data_str = "\n".join(data_lines)
-                    try:
-                        data = json.loads(data_str) if data_str else {}
-                    except json.JSONDecodeError:
-                        data = {}
-                    
-                    if current_event_type == "PartStartEvent":
-                        part = data.get("part", {})
-                        part_kind = part.get("part_kind")
-                        if part_kind == "thinking":
-                            in_thinking = True
-                        elif part_kind == "text":
-                            in_thinking = False
-                            content = part.get("content", "")
-                            if content:
-                                accumulated_text += content
-                    elif current_event_type == "PartDeltaEvent":
-                        if not in_thinking:
-                            delta = data.get("delta", {})
-                            content = delta.get("content_delta", "")
-                            if content:
-                                accumulated_text += content
-                    elif current_event_type == "Error":
-                        return f"[error: {data.get('message', 'Unknown error')}]"
-                    
-                    current_event_type = None
-                    data_lines = []
-                    
-    except httpx.TimeoutException:
-        suffix = f"\n[timed out after {TIMEOUT_SECONDS}s]"
-        return (accumulated_text + suffix) if accumulated_text else suffix.strip()
-    except httpx.RequestError as e:
+        return send_message_sync(SERVER_URL, agent_id, message)
+    except AgentStreamError as e:
         return f"[error: {e}]"
-    
-    return accumulated_text.strip()
 
 
 def print_separator(label: str) -> None:
@@ -190,17 +113,20 @@ def main():
     )
     args = parser.parse_args()
 
-    registry = load_agent_registry()
-    agents = resolve_agents(args.agents, registry)
-    agent_ids = {name: agent_id for name, agent_id in agents}
+    # Resolve agent names to IDs via the Agent Home registry
+    try:
+        agent_ids = {name: resolve_agent_id_by_name_sync(SERVER_URL, name) for name in args.agents}
+    except AgentStreamError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
-    participants = ["james"] + [name for name, _ in agents]
+    participants = ["james"] + list(args.agents)
     agent_list = ", ".join(name.capitalize() for name in participants[1:])
     print(f"Group chat — {agent_list}")
     print("Type a message, 'skip' (or 's'/Enter) to let agents continue, '/quit' to exit.\n")
 
     thread: list[tuple[str, str]] = []
-    last_seen: dict[str, int] = {name: 0 for name, _ in agents}
+    last_seen: dict[str, int] = {name: 0 for name in args.agents}
     turn = 0
     consecutive_skips = 0
     reminder_injected = False

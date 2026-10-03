@@ -15,16 +15,20 @@ Configuration via .env:
 """
 
 import asyncio
-import json
 import os
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-import httpx
 from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, MessageHandler, CommandHandler, filters
+
+from agent_home_client import (
+    AgentStreamError,
+    resolve_agent_id_by_name_async,
+    send_message_async,
+)
 
 load_dotenv()
 
@@ -102,98 +106,15 @@ def is_authorized_user(id: int):
     return id in ALLOWED_USER_IDS
 
 
-async def resolve_agent_id(client: httpx.AsyncClient) -> str:
-    """Look up the agent ID by name from the Agent Home registry.
-
-    Resolving by name (rather than hardcoding an ID) means the bridge keeps
-    working if the agent is ever recreated with a new ID.
-    """
-    resp = await client.get(f"{SERVER_URL}/agents")
-    resp.raise_for_status()
-    for agent in resp.json():
-        if agent.get("name") == AGENT_NAME:
-            return agent["id"]
-    raise RuntimeError(
-        f"Agent {AGENT_NAME!r} not found on {SERVER_URL} — check AGENT_NAME/SERVER_URL"
-    )
-
-
-async def _consume_agent_stream(message: str, timeout_seconds: int) -> str:
-    """POST a message to the agent and consume the SSE response stream.
-
-    Returns the accumulated text response (thinking parts excluded). On
-    timeout, returns whatever accumulated plus a timeout notice — a partial
-    response is better than losing it entirely.
-
-    Raises RuntimeError for HTTP errors and stream Error events, so callers
-    can distinguish hard failures from (partial) success.
-    """
-    url = f"{SERVER_URL}/agents/{AGENT_ID}/messages"
-    accumulated_text = ""
-    in_thinking = False
-
-    try:
-        async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            async with client.stream("POST", url, json={"message": message}) as response:
-                if response.status_code != 200:
-                    detail = (await response.aread()).decode(errors="replace")[:200]
-                    raise RuntimeError(f"HTTP {response.status_code}: {detail}")
-
-                current_event_type = None
-                data_lines = []
-
-                async for line in response.aiter_lines():
-                    if line.startswith("event:"):
-                        current_event_type = line[6:].strip()
-                        data_lines = []
-                    elif line.startswith("data:"):
-                        data_lines.append(line[5:].strip())
-                    elif line == "" and current_event_type:
-                        data_str = "\n".join(data_lines)
-                        try:
-                            data = json.loads(data_str) if data_str else {}
-                        except json.JSONDecodeError:
-                            data = {}
-
-                        if current_event_type == "PartStartEvent":
-                            part = data.get("part", {})
-                            part_kind = part.get("part_kind")
-                            if part_kind == "thinking":
-                                in_thinking = True
-                            elif part_kind == "text":
-                                in_thinking = False
-                                content = part.get("content", "")
-                                if content:
-                                    accumulated_text += content
-                        elif current_event_type == "PartDeltaEvent":
-                            if not in_thinking:
-                                delta = data.get("delta", {})
-                                content = delta.get("content_delta", "")
-                                if content:
-                                    accumulated_text += content
-                        elif current_event_type == "Error":
-                            raise RuntimeError(data.get("message", "Unknown error"))
-
-                        current_event_type = None
-                        data_lines = []
-    except httpx.TimeoutException:
-        suffix = f"\n[timed out after {timeout_seconds}s]"
-        return (accumulated_text + suffix) if accumulated_text else suffix.strip()
-    except httpx.RequestError as e:
-        raise RuntimeError(f"Connection error: {e}") from e
-
-    return accumulated_text.strip()
-
-
 async def send_message(message: str) -> dict:
     """Send a message to the agent and return its response.
 
     Returns dict with 'success' and 'result' keys.
     """
     try:
-        text = await _consume_agent_stream(message, MESSAGE_TIMEOUT_SECONDS)
+        text = await send_message_async(SERVER_URL, AGENT_ID, message, MESSAGE_TIMEOUT_SECONDS)
         return {"success": True, "result": text}
-    except RuntimeError as e:
+    except AgentStreamError as e:
         return {"success": False, "result": str(e)}
 
 
@@ -204,8 +125,8 @@ async def send_alert_to_opus(message: str):
     run completes server-side (dropping the connection mid-run could cancel it).
     """
     try:
-        await _consume_agent_stream(message, ALERT_TIMEOUT_SECONDS)
-    except RuntimeError as e:
+        await send_message_async(SERVER_URL, AGENT_ID, message, ALERT_TIMEOUT_SECONDS)
+    except AgentStreamError as e:
         print(f"Alert delivery failed: {e}")
 
 
@@ -411,11 +332,7 @@ def main():
 
     # Resolve the agent ID from the registry before starting — fail fast
     # if the server is down or the agent doesn't exist.
-    async def _resolve():
-        async with httpx.AsyncClient(timeout=30) as client:
-            return await resolve_agent_id(client)
-
-    AGENT_ID = asyncio.run(_resolve())
+    AGENT_ID = asyncio.run(resolve_agent_id_by_name_async(SERVER_URL, AGENT_NAME))
     print(f"Connected to agent {AGENT_NAME!r} ({AGENT_ID}) at {SERVER_URL}")
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
