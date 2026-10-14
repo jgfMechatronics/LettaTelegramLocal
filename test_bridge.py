@@ -34,11 +34,6 @@ async def test_registry_resolution():
     agent_id = resolve_agent_id_by_name_sync(SERVER_URL, "opus")  # lowercase — case-insensitive
     print(f"[PASS] registry resolution (sync, lowercase): {agent_id}")
 
-    # Timestamp helper — exercises zoneinfo/tzdata (regression guard: the
-    # /start handler crashed with ZoneInfoNotFoundError when tzdata was absent)
-    ts = bridge.get_est_timestamp()
-    assert "EST" in ts and ":" in ts, f"bad timestamp: {ts!r}"
-    print(f"[PASS] get_est_timestamp: {ts!r}")
     return agent_id
 
 
@@ -140,18 +135,17 @@ async def test_commands():
 async def test_format_incoming_message():
     """First-of-session includes the guide; subsequent get the one-line reminder.
     Message always on a fresh line after the header."""
-    ts = "Oct 03, 12:58 PM EST"
     msg = "Hello from telegram"
 
-    first = bridge.format_incoming_message(msg, ts, include_guide=True)
+    first = bridge.format_incoming_message(msg, include_guide=True)
     assert first.startswith("[TELEGRAM BRIDGE GUIDE"), first[:50]
     assert "<telegram>...</telegram>" in first, "guide must document the tags"
     assert "KILL_TELEGRAM" in first and "MESSAGE_JAMES" in first
-    assert f"[via Telegram, {ts}]\n{msg}" in first, "header + message on fresh line"
+    assert f"[via Telegram]\n{msg}" in first, "header + message on fresh line"
     print("[PASS] first-message format: guide included, message on own line")
 
-    later = bridge.format_incoming_message(msg, ts, include_guide=False)
-    assert later.startswith(f"[via Telegram, {ts}]"), later[:50]
+    later = bridge.format_incoming_message(msg, include_guide=False)
+    assert later.startswith("[via Telegram]"), later[:50]
     assert bridge.TELEGRAM_TAG_REMINDER in later
     assert "GUIDE" not in later
     assert later.endswith(f"\n{msg}"), "message on fresh line after reminder"

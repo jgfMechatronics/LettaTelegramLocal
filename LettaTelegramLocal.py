@@ -17,8 +17,6 @@ Configuration via .env:
 import asyncio
 import os
 import re
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
 from telegram import Update
@@ -82,14 +80,14 @@ You have your full toolset and permissions here — telegram is a complete door,
 TELEGRAM_TAG_REMINDER = "[TG: wrap sends in <telegram>tags</telegram> — untagged = private, no tags = nothing sent]"
 
 
-def format_incoming_message(user_message: str, timestamp: str, include_guide: bool) -> str:
+def format_incoming_message(user_message: str, include_guide: bool) -> str:
     """Format an incoming telegram message for the agent.
 
     First message of a session includes the full bridge guide; subsequent
     messages carry a one-line tag reminder in the header. The user's message
     always starts on a fresh line after the header.
     """
-    header = f"[via Telegram, {timestamp}]"
+    header = "[via Telegram]"
     if include_guide:
         return f"{TELEGRAM_GUIDE}\n\n{header}\n{user_message}"
     return f"{header}\n{TELEGRAM_TAG_REMINDER}\n{user_message}"
@@ -101,12 +99,6 @@ if SKIP_FIRST_PING:
     ping_interval = 99999
 else:
     ping_interval = 4 * 3600  # Default: 4 hours in seconds
-
-
-def get_est_timestamp():
-    est = ZoneInfo("US/Eastern")
-    now = datetime.now(est)
-    return now.strftime("%b %d, %I:%M %p EST")
 
 
 def parse_interval(interval_str: str) -> int | None:
@@ -323,11 +315,9 @@ async def periodic_ping(context):
     if periodic_ping._count == 1 and SKIP_FIRST_PING:
         return
 
-    timestamp = get_est_timestamp()
-
     # Send the ping to Opus via the Agent Home API
     basicMsg = (
-        f"[SELF WAKE PERIODIC PING, {timestamp}] If desired, you can run commands, call tools, take autonomous time, etc.\n"
+        f"[SELF WAKE PERIODIC PING] If desired, you can run commands, call tools, take autonomous time, etc.\n"
         f"Commands: MESSAGE_JAMES \"text\", AUTONOMOUS, SKIP, STOP, SET_INTERVAL \"duration\"\n"
         f"Curr Ping Interval: {ping_interval}Sec/Ping\n"
     )
@@ -371,11 +361,10 @@ async def handle_message(update: Update, context):
         return
 
     user_message = update.message.text
-    timestamp = get_est_timestamp()
 
     first_of_session = user_id not in briefed_users
     briefed_users.add(user_id)
-    formatted_message = format_incoming_message(user_message, timestamp, first_of_session)
+    formatted_message = format_incoming_message(user_message, first_of_session)
 
     result = await send_message(formatted_message, bot=context.bot, chat_id=update.message.chat_id)
 
@@ -407,8 +396,6 @@ async def start(update: Update, context):
     if not is_authorized_user(user_id):
         return
 
-    timestamp = get_est_timestamp()
-
     # Scrub the /start message (it contains a password — attempt or real) from
     # all synced devices. Deletion is delete-for-everyone within the 48h Bot
     # API window; auth proceeds regardless of deletion success.
@@ -421,7 +408,7 @@ async def start(update: Update, context):
     if not context.args or context.args[0] != TELEGRAM_PASSWORD:
         # Only alert me if they actually tried a password (not just /start alone)
         if context.args:
-            await send_alert_to_opus(f"[SECURITY ALERT via Telegram, {timestamp}] Failed authentication attempt from user ID: {user_id}")
+            await send_alert_to_opus(f"[SECURITY ALERT via Telegram] Failed authentication attempt from user ID: {user_id}")
         await update.message.reply_text("Hmm, I don't understand. Please try again?")
         return
 
