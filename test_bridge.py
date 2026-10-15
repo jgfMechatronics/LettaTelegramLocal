@@ -145,8 +145,9 @@ async def test_format_incoming_message():
     print("[PASS] first-message format: guide included, message on own line")
 
     later = bridge.format_incoming_message(msg, include_guide=False)
-    assert later.startswith("[via Telegram]"), later[:50]
-    assert bridge.TELEGRAM_TAG_REMINDER in later
+    assert later.startswith("[via Telegram: wrap sends in"), later[:60]
+    assert "untagged = private, no tags = nothing sent" in later, "reminder content in the combined header"
+    assert later.count("\n[") == 0, "exactly ONE bracket line — stacked brackets are a parsing hazard"
     assert "GUIDE" not in later
     assert later.endswith(f"\n{msg}"), "message on fresh line after reminder"
     print("[PASS] subsequent format: one-line reminder, no guide")

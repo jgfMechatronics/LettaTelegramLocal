@@ -77,20 +77,21 @@ Commands (each on its own line in your response):
 
 You have your full toolset and permissions here — telegram is a complete door, not a limited one."""
 
-TELEGRAM_TAG_REMINDER = "[TG: wrap sends in <telegram>tags</telegram> — untagged = private, no tags = nothing sent]"
+# Combined channel + tag-reminder in ONE bracket line — stacked bracket headers
+# were a demonstrated parsing hazard for the agent reading them (Oct 14 field notes).
+TELEGRAM_HEADER = "[via Telegram: wrap sends in <telegram>tags</telegram> — untagged = private, no tags = nothing sent]"
 
 
 def format_incoming_message(user_message: str, include_guide: bool) -> str:
     """Format an incoming telegram message for the agent.
 
-    First message of a session includes the full bridge guide; subsequent
-    messages carry a one-line tag reminder in the header. The user's message
-    always starts on a fresh line after the header.
+    First message of a session includes the full bridge guide (channel-labeled);
+    subsequent messages carry the combined channel + tag-reminder header. The
+    user's message always starts on a fresh line after the header.
     """
-    header = "[via Telegram]"
     if include_guide:
-        return f"{TELEGRAM_GUIDE}\n\n{header}\n{user_message}"
-    return f"{header}\n{TELEGRAM_TAG_REMINDER}\n{user_message}"
+        return f"{TELEGRAM_GUIDE}\n\n[via Telegram]\n{user_message}"
+    return f"{TELEGRAM_HEADER}\n{user_message}"
 
 # Periodic ping state
 # These are module-level so they persist across async calls but reset on script restart
