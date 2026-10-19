@@ -96,8 +96,9 @@ def format_incoming_message(user_message: str, include_guide: bool) -> str:
 # Periodic ping state
 # These are module-level so they persist across async calls but reset on script restart
 ping_job = None           # Reference to the scheduled job (so we can cancel/modify it)
+# ping_interval = None means pings are disabled; otherwise it's the interval in seconds
 if SKIP_FIRST_PING:
-    ping_interval = 99999
+    ping_interval = None  # Actually disabled, not just very long
 else:
     ping_interval = 4 * 3600  # Default: 4 hours in seconds
 
@@ -210,7 +211,7 @@ async def send_alert_to_opus(message: str):
     try:
         await send_message_async(SERVER_URL, AGENT_ID, message, ALERT_TIMEOUT_SECONDS)
     except AgentStreamError as e:
-        print(f"Alert delivery failed: {e}")
+        print(f"[{AGENT_NAME}] Alert delivery failed: {e}")
 
 
 async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, current_job=None, application=None):
@@ -238,19 +239,19 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
         if target_user_id not in authenticated_users:
             await send_alert_to_opus("[MESSAGE_JAMES FAILED] User has not authenticated yet (/start). Message not sent.")
             executed["MESSAGE_JAMES"] = {"status": "failed", "reason": "user_not_authenticated"}
-            print(f"MESSAGE_JAMES blocked: user {target_user_id} not authenticated")
+            print(f"[{AGENT_NAME}] MESSAGE_JAMES blocked: user {target_user_id} not authenticated")
         else:
             content = message_match.group(1).strip()
             await bot.send_message(chat_id=target_user_id, text=content)
             executed["MESSAGE_JAMES"] = content
-            print(f"Sent MESSAGE_JAMES: {content[:50]}...")
+            print(f"[{AGENT_NAME}] Sent MESSAGE_JAMES: {content[:50]}...")
 
     # STOP — cancel periodic pings (must be on its own line)
     if re.search(r'^\s*STOP\s*$', opus_response, re.IGNORECASE | re.MULTILINE) and current_job:
         current_job.schedule_removal()
         ping_job = None
         executed["STOP"] = True
-        print("Ping stopped by Opus")# SET_INTERVAL "duration" — change ping frequency (must be on its own line)
+        print(f"[{AGENT_NAME}] Ping stopped")# SET_INTERVAL "duration" — change ping frequency (must be on its own line)
     interval_match = re.search(r'^\s*SET_INTERVAL\s*["\'](.+?)["\']\s*$', opus_response, re.IGNORECASE | re.MULTILINE)
     if interval_match and job_queue:
         new_interval = parse_interval(interval_match.group(1))
@@ -265,26 +266,26 @@ async def parse_and_execute_commands(opus_response: str, bot, job_queue=None, cu
             )
             executed["SET_INTERVAL"] = ping_interval
             alertStr = f"Interval updated to {ping_interval} seconds"
-            print(alertStr)
+            print(f"[{AGENT_NAME}] {alertStr}")
             await send_alert_to_opus(alertStr)
         else:
             failureStr = f"Invalid interval in: {opus_response[:100]}"
-            print(failureStr)
+            print(f"[{AGENT_NAME}] {failureStr}")
             await send_alert_to_opus(failureStr)
 
     # AUTONOMOUS and SKIP are informational (must be on their own line)
     if re.search(r'^\s*AUTONOMOUS\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
         executed["AUTONOMOUS"] = True
-        print("Opus taking autonomous time")
+        print(f"[{AGENT_NAME}] Taking autonomous time")
     if re.search(r'^\s*SKIP\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
         executed["SKIP"] = True
-        print("Opus skipped this ping")
+        print(f"[{AGENT_NAME}] Skipped this ping")
 
     # KILL_TELEGRAM — emergency shutdown of the Telegram bridge
     # Security feature: if something seems wrong (spammer, compromised auth), Opus can kill the link
     if re.search(r'^\s*KILL_TELEGRAM\s*$', opus_response, re.IGNORECASE | re.MULTILINE):
         executed["KILL_TELEGRAM"] = True
-        print("!!! KILL_TELEGRAM invoked — shutting down Telegram bridge !!!")
+        print(f"[{AGENT_NAME}] !!! KILL_TELEGRAM invoked — shutting down Telegram bridge !!!")
         # Alert before shutdown so it's in the conversation history
         await send_alert_to_opus("[KILL_TELEGRAM EXECUTED] Telegram bridge shutting down. Restart manually when safe.")
         # Graceful shutdown — this will stop polling and exit run_polling()
@@ -333,7 +334,7 @@ async def periodic_ping(context):
     result = await send_message(prompt, bot=context.bot, chat_id=int(AUTHORIZED_USER))
 
     if not result["success"]:
-        print(f"Ping failed: {result['result']}")
+        print(f"[{AGENT_NAME}] Ping failed: {result['result']}")
         return
 
     opus_response = result["result"]
@@ -348,7 +349,7 @@ async def periodic_ping(context):
     )
 
     if not executed:
-        print(f"No command recognized in: {opus_response[:100]}")
+        print(f"[{AGENT_NAME}] No command recognized in: {opus_response[:100]}")
 
 
 async def handle_message(update: Update, context):
@@ -416,7 +417,7 @@ async def start(update: Update, context):
     # Correct password
     authenticated_users.add(user_id)
     briefed_users.discard(user_id)  # re-auth re-briefs: guide arrives with next message
-    await update.message.reply_text("Connected to Opus! Send me a message.")
+    await update.message.reply_text(f"Connected to {AGENT_NAME}! Send me a message.")
 
 
 def main():
@@ -425,13 +426,13 @@ def main():
     # Resolve the agent ID from the registry before starting — fail fast
     # if the server is down or the agent doesn't exist.
     AGENT_ID = asyncio.run(resolve_agent_id_by_name_async(SERVER_URL, AGENT_NAME))
-    print(f"Connected to agent {AGENT_NAME!r} ({AGENT_ID}) at {SERVER_URL}")
+    print(f"[{AGENT_NAME}] Connected to agent ({AGENT_ID}) at {SERVER_URL}")
 
     app = Application.builder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    # Schedule the periodic ping using JobQueue
+    # Schedule the periodic ping using JobQueue (if enabled)
     # JobQueue is built into python-telegram-bot — it manages scheduled tasks
     # within the same event loop that handles Telegram updates
     #
@@ -439,13 +440,17 @@ def main():
     #   - callback: the async function to run
     #   - interval: seconds between runs
     #   - first: seconds until FIRST run
-    ping_job = app.job_queue.run_repeating(
-        periodic_ping,
-        interval=ping_interval,
-        first=10  # TODO: Change to ping_interval for production
-    )
+    if ping_interval:
+        ping_job = app.job_queue.run_repeating(
+            periodic_ping,
+            interval=ping_interval,
+            first=10  # TODO: Change to ping_interval for production
+        )
 
-    print(f"Bot running with polling... Ping interval: {ping_interval} seconds")
+    if ping_interval:
+        print(f"[{AGENT_NAME}] Bot running with polling... Ping interval: {ping_interval} seconds")
+    else:
+        print(f"[{AGENT_NAME}] Bot running with polling... Pings disabled")
 
     # run_polling() starts the event loop and blocks forever
     app.run_polling()
