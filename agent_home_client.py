@@ -140,25 +140,15 @@ def send_message_sync(server_url: str, agent_id: str, message: str,
     return acc.text()
 
 
-def _find_agent_by_name(agents: list, agent_name: str, server_url: str) -> str:
-    """Return the ID for agent_name (case-insensitive), or raise with the
-    available names listed."""
-    for agent in agents:
-        if agent.get("name", "").lower() == agent_name.lower():
-            return agent["id"]
-    available = ", ".join(sorted(a.get("name", "?") for a in agents))
-    raise AgentStreamError(
-        f"Agent {agent_name!r} not found on {server_url} — available: {available}"
-    )
-
-
 def resolve_agent_id_by_name_sync(server_url: str, agent_name: str) -> str:
     """Look up an agent ID by name from the Agent Home registry."""
     try:
         with httpx.Client(timeout=30) as client:
-            resp = client.get(f"{server_url}/agents")
+            resp = client.get(f"{server_url}/agents/by-name/{agent_name}")
+            if resp.status_code == 404:
+                raise AgentStreamError(f"Agent {agent_name!r} not found on {server_url}")
             resp.raise_for_status()
-            return _find_agent_by_name(resp.json(), agent_name, server_url)
+            return resp.json()["id"]
     except httpx.HTTPError as e:
         raise AgentStreamError(f"Registry lookup failed: {e}") from e
 
@@ -167,8 +157,10 @@ async def resolve_agent_id_by_name_async(server_url: str, agent_name: str) -> st
     """Async twin of resolve_agent_id_by_name_sync."""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(f"{server_url}/agents")
+            resp = await client.get(f"{server_url}/agents/by-name/{agent_name}")
+            if resp.status_code == 404:
+                raise AgentStreamError(f"Agent {agent_name!r} not found on {server_url}")
             resp.raise_for_status()
-            return _find_agent_by_name(resp.json(), agent_name, server_url)
+            return resp.json()["id"]
     except httpx.HTTPError as e:
         raise AgentStreamError(f"Registry lookup failed: {e}") from e
