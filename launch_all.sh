@@ -58,7 +58,7 @@ for agent in "${AGENTS[@]}"; do
     fi
     
     echo "Launching bridge for $agent..."
-    TELEGRAM_BOT_TOKEN="$token" AGENT_NAME="$agent" \
+    AGENT_NAME="$agent" \
         systemd-inhibit \
             --what=sleep:idle \
             --who="Agent Home Telegram Bridge ($agent)" \

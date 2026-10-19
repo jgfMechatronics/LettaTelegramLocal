@@ -32,7 +32,9 @@ from agent_home_client import (
 load_dotenv()
 
 # Config
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+AGENT_NAME = os.getenv("AGENT_NAME", "Opus")
+# Try agent-specific token first, fall back to generic
+TELEGRAM_BOT_TOKEN = os.getenv(f"TELEGRAM_BOT_TOKEN_{AGENT_NAME.upper()}") or os.getenv("TELEGRAM_BOT_TOKEN")
 AUTHORIZED_USER = os.getenv("AUTHORIZED_USER")
 TELEGRAM_PASSWORD = os.getenv("TELEGRAM_PASSWORD")
 SKIP_FIRST_PING = os.getenv("SKIP_FIRST_PING")
@@ -44,7 +46,6 @@ else:
     raise Exception("invalid value for SKIP_FIRST_PING")
 
 SERVER_URL = os.getenv("SERVER_URL", "http://localhost:8000")
-AGENT_NAME = os.getenv("AGENT_NAME", "Opus")
 
 ALLOWED_USER_IDS = [int(AUTHORIZED_USER)]
 
